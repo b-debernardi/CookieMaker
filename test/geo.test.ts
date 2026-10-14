@@ -67,6 +67,24 @@ const w = await Module();
 w.setup();
 w.setMinCircularAngle(4);
 w.setMinCircularEdgeLength(0.2);
+for (const partsMode of ['largest', 'outline', 'set'] as const) {
+  const arena = new Arena();
+  const g = new Geo(w as any, arena as any);
+  const issues: any[] = [];
+  const t0 = performance.now();
+  const p = { ...DEFAULTS, partsMode };
+  const pr = prepare(g, designs.logo, p, issues, 'set')!;
+  const out = buildPieces(g, pr, p, 'set', issues);
+  for (let k = 1; k < out.length; k++) {
+    if (!out[k].inPlace) continue;
+    const overlap = out[k - 1].part.intersect(out[k].part);
+    if (overlap.volume() > 1e-3) throw new Error(`logo/${partsMode}: el sello choca con el cortador`);
+    overlap.delete();
+  }
+  console.log(`logo/set/${partsMode} shapes=${pr.shapes} aspect=${pr.aspect.toFixed(2)} ${(performance.now() - t0).toFixed(0)}ms\n  ` +
+    out.map((o) => `${o.name}: ${o.part.status()} vol=${o.part.volume().toFixed(0)}`).join('\n  ') + '\n  ' + issues.map((i) => i.text).join('\n  '));
+  arena.free();
+}
 for (const [name, d] of Object.entries(designs)) {
   for (const piece of ['cutter', 'imprint', 'stamp', 'set'] as Piece[]) {
     for (const cutMode of ['outline', 'holes'] as const) {
@@ -75,10 +93,11 @@ for (const [name, d] of Object.entries(designs)) {
       const issues: any[] = [];
       const t0 = performance.now();
       const p = { ...DEFAULTS, cutMode, baseShape: 'round' as const };
-      const pr = prepare(g, d, p, issues)!;
+      const pr = prepare(g, d, p, issues, piece)!;
       const out = buildPieces(g, pr, p, piece, issues);
-      if (out.length === 2 && out[1].inPlace) {
-        const overlap = out[0].part.intersect(out[1].part);
+      for (let k = 1; k < out.length; k++) {
+        if (!out[k].inPlace) continue;
+        const overlap = out[k - 1].part.intersect(out[k].part);
         if (overlap.volume() > 1e-3) throw new Error(`${name}/${piece}/${cutMode}: el sello choca con el cortador (${overlap.volume().toFixed(2)} mm3)`);
         overlap.delete();
       }

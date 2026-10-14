@@ -4,6 +4,8 @@
 
 export type Piece = 'cutter' | 'imprint' | 'stamp' | 'set';
 export type Units = 'mm' | 'in';
+/** What the cutter + stamp set does with separate shapes in the design. */
+export type PartsMode = 'largest' | 'outline' | 'set';
 
 export interface ManualBridge {
   angle: number; // 0..179 degrees
@@ -51,6 +53,7 @@ export interface Params {
   clearance: number;
   setClearance: number;
   mergeParts: boolean;
+  partsMode: PartsMode;
   reliefDepth: number;
   efComp: boolean;
   efAmount: number;
@@ -114,6 +117,7 @@ export const DEFAULTS: Params = {
   clearance: 0.9,
   setClearance: 0.5,
   mergeParts: true,
+  partsMode: 'largest',
   reliefDepth: 3,
   efComp: true,
   efAmount: 0.2,
@@ -141,7 +145,7 @@ export const DEFAULTS: Params = {
 /** Keys that describe the design rather than how it is manufactured. */
 export const DESIGN_KEYS: (keyof Params)[] = [
   'sizeW', 'sizeH', 'lockAspect', 'threshold', 'invertImage', 'cutMode', 'reliefMode',
-  'envelope', 'envelopePad', 'mirror', 'manualBridges', 'towerAuto', 'towerX', 'towerY',
+  'envelope', 'envelopePad', 'mirror', 'manualBridges', 'towerAuto', 'towerX', 'towerY', 'partsMode',
 ];
 
 export type Kind = 'len' | 'deg' | 'pct' | 'num' | 'bool' | 'choice';
@@ -309,6 +313,12 @@ export const SECTIONS: SectionMeta[] = [
       { key: 'showEdges', label: 'Mostrar aristas', kind: 'bool', adv: true },
     ],
   },
+];
+
+export const PARTS_MODES: { value: PartsMode; label: string; hint: string }[] = [
+  { value: 'largest', label: 'Más grande', hint: 'Usa la forma más grande e ignora el resto.' },
+  { value: 'outline', label: 'Contorno', hint: 'Un solo contorno alrededor de todas las formas; el resto queda en relieve.' },
+  { value: 'set', label: 'Set', hint: 'Un set: un cortador con su sello para cada forma.' },
 ];
 
 export const PIECES: { value: Piece; label: string }[] = [

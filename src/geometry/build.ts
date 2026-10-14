@@ -21,10 +21,22 @@ export interface Prepared {
   outline: CS;
   /** Relief lines in "edges" mode: borders between colours plus strokes. */
   edgeLines: CS;
+  /** Separate shapes in the design (laurels, stars around a shield…). */
+  shapes: number;
+  /** Height / width of the design as built (after "largest only"). */
+  aspect: number;
+}
+
+/** Separate shapes of an outline, biggest first, ignoring specks. */
+function separateShapes(g: Geo, outline: CS, minArea = 0): CS[] {
+  const parts = outline.decompose().map((c) => g.keep(c)).sort((a, b) => b.area() - a.area());
+  if (!parts.length) return [];
+  const min = Math.max(minArea, parts[0].area() * 0.002);
+  return parts.filter((c) => c.area() >= min);
 }
 
 /** Steps 1–3 of the pipeline: paint the layers, clean, scale to mm. */
-export function prepare(g: Geo, d: Design, p: Params, issues: Issue[]): Prepared | null {
+export function prepare(g: Geo, d: Design, p: Params, issues: Issue[], piece: Piece = 'cutter'): Prepared | null {
   // Painter's model: each colour is a region; later layers cover earlier ones.
   const fillRegions = new Map<string, CS>();
   const paintRegions = new Map<string, CS>();
@@ -44,8 +56,22 @@ export function prepare(g: Geo, d: Design, p: Params, issues: Issue[]): Prepared
       strokeLines.push({ lines: l.lines, closed: l.closed });
     }
   }
-  const dark0 = g.union([...paintRegions.values()]);
+  let dark0 = g.union([...paintRegions.values()]);
   if (dark0.isEmpty()) return null;
+
+  // Separate shapes: in the cutter + stamp set the user picks what to do
+  // with them; "largest only" drops everything but the biggest one here, so
+  // the size applies to it.
+  const shapes0 = separateShapes(g, g.fillHoles(dark0));
+  const shapes = shapes0.length;
+  let mask: CS | null = null;
+  if (piece === 'set' && p.partsMode === 'largest' && shapes > 1) {
+    mask = shapes0[0];
+    dark0 = g.inter(dark0, mask);
+    for (const regions of [fillRegions, paintRegions]) {
+      for (const [k, r] of regions) regions.set(k, g.inter(r, mask));
+    }
+  }
 
   // Scale so the design fits the requested size, centred on the origin.
   const bb = dark0.bounds();
@@ -80,12 +106,13 @@ export function prepare(g: Geo, d: Design, p: Params, issues: Issue[]): Prepared
     const lines = s.lines.map((l) => l.map(tp));
     bands.push(g.cs(strokePolys(lines, s.closed, lw)));
   }
-  const edgeLines = g.union(bands);
+  let edgeLines = g.union(bands);
+  if (mask) edgeLines = g.inter(edgeLines, g.offset(tf(mask), lw));
 
   if (sx * w > p.bedSize || sy * h > p.bedSize) {
     issues.push({ level: 'error', text: `El diseño no entra en la cama de ${p.bedSize} mm.` });
   }
-  return { dark, outline, edgeLines };
+  return { dark, outline, edgeLines, shapes, aspect: h / w };
 }
 
 function envelope(g: Geo, outline: CS, p: Params): CS {
@@ -111,7 +138,9 @@ function envelope(g: Geo, outline: CS, p: Params): CS {
 
 /** Parts thinner than `w`, ignoring the specks every sharp corner leaves. */
 function thinParts(g: Geo, a: CS, w: number): CS[] {
-  const rest = g.sub(a, g.open(a, w * 0.98));
+  // Drop the hairline slivers a slightly uneven edge leaves behind, or a
+  // line that is wide enough gets thickened in beads along its sides.
+  const rest = g.open(g.sub(a, g.open(a, w * 0.98)), Math.min(0.1, w * 0.2));
   if (rest.isEmpty()) return [];
   return rest.decompose().map((c) => g.keep(c)).filter((c) => c.area() > w * w * 0.6);
 }
@@ -454,7 +483,7 @@ function segDist(q: Pt, a: Pt, b: Pt): number {
  * back to the convex hull.
  */
 function mergeParts(g: Geo, outline: CS, p: Params, issues: Issue[]): CS {
-  const parts = outline.decompose().map((c) => g.keep(c)).filter((c) => c.area() >= 1);
+  const parts = separateShapes(g, outline, 1);
   if (parts.length <= 1) return outline;
   const all = g.union(parts);
   // Start wide enough to fill the slits between, say, a laurel and the shield,
@@ -470,6 +499,52 @@ function mergeParts(g: Geo, outline: CS, p: Params, issues: Issue[]): CS {
   }
   issues.push({ level: 'info', text: `Las ${parts.length} partes del diseño están muy separadas; se unieron con su contorno convexo.` });
   return g.keep(all.hull());
+}
+
+/** Cutter + stamp set, following the chosen way to handle separate shapes. */
+function buildSet(g: Geo, pr: Prepared, cutRegion: CS, p: Params, issues: Issue[]): PieceOut[] {
+  const several = pr.shapes > 1 && p.envelope === 'none';
+  if (several && p.partsMode === 'outline') {
+    // One silhouette around everything; the rest becomes relief.
+    const merged = mergeParts(g, pr.outline, p, issues);
+    const prm = { ...pr, outline: merged };
+    const R = merged;
+    const cutter = buildCutter(g, R, p, null, issues);
+    const stamp = buildInsetStamp(g, R, cutter, p, relief(g, prm, p, issues), issues);
+    issues.push({ level: 'info', text: 'El sello se imprime adentro del cortador, con el relieve hacia arriba.' });
+    return [cutter, stamp];
+  }
+  if (several && p.partsMode === 'set') {
+    // A cutter with its stamp for every shape, laid out side by side.
+    const rel = relief(g, pr, p, issues);
+    const out: PieceOut[] = [];
+    const shapes = separateShapes(g, pr.outline, 2);
+    let skipped = 0;
+    shapes.forEach((shape, i) => {
+      const R = g.inter(cutRegion, shape);
+      const local: Issue[] = [];
+      const cutter = buildCutter(g, R, p, null, local);
+      cutter.name = `cortador ${i + 1}`;
+      out.push(cutter);
+      try {
+        const stamp = buildInsetStamp(g, R, cutter, p, rel, local);
+        stamp.name = `sello ${i + 1}`;
+        out.push(stamp);
+      } catch {
+        skipped++;
+      }
+      for (const it of local) if (!issues.some((x) => x.text === it.text)) issues.push(it);
+    });
+    issues.push({ level: 'info', text: `Se armó un set de ${shapes.length} cortadores, cada uno con su sello adentro.` });
+    if (skipped) {
+      issues.push({ level: 'info', text: `${skipped} ${skipped === 1 ? 'forma es muy chica' : 'formas son muy chicas'} para llevar sello; ${skipped === 1 ? 'queda' : 'quedan'} solo con cortador.` });
+    }
+    return out;
+  }
+  const cutter = buildCutter(g, cutRegion, p, null, issues);
+  const stamp = buildInsetStamp(g, cutRegion, cutter, p, relief(g, pr, p, issues), issues);
+  issues.push({ level: 'info', text: 'El sello se imprime adentro del cortador, con el relieve hacia arriba.' });
+  return [cutter, stamp];
 }
 
 export function buildPieces(g: Geo, pr0: Prepared, p: Params, piece: Piece, issues: Issue[]): PieceOut[] {
@@ -496,11 +571,7 @@ export function buildPieces(g: Geo, pr0: Prepared, p: Params, piece: Piece, issu
       return [buildCutter(g, cutRegion, p, relief(g, pr, p, issues), issues)];
     case 'stamp':
       return [buildStamp(g, pr.outline, p, relief(g, pr, p, issues), issues)];
-    case 'set': {
-      const cutter = buildCutter(g, cutRegion, p, null, issues);
-      const stamp = buildInsetStamp(g, cutRegion, cutter, p, relief(g, pr, p, issues), issues);
-      issues.push({ level: 'info', text: 'El sello se imprime adentro del cortador, con el relieve hacia arriba.' });
-      return [cutter, stamp];
-    }
+    case 'set':
+      return buildSet(g, pr, cutRegion, p, issues);
   }
 }

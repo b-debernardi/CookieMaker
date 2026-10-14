@@ -28,6 +28,10 @@ export interface BuildResult {
   error?: string;
   meshes: MeshOut[];
   issues: Issue[];
+  /** Separate shapes found in the design. */
+  shapes: number;
+  /** Height / width of the design as built. */
+  aspect: number;
   /** Bounding box of all parts, in mm. */
   size: [number, number, number];
   ms: number;

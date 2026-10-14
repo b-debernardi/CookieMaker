@@ -17,6 +17,8 @@ Los cortadores se muestran espejados a propósito: se imprimen con la base sobre
 para cortar, el diseño queda al derecho. El sello se imprime con la cara sobre la cama.
 En "Cortador + sello" el sello es una placa plana que se imprime adentro del cortador, con el relieve hacia arriba
 y una holgura configurable con la pared (0.5 mm por defecto).
+Si el diseño tiene formas separadas (por ejemplo laureles o estrellas alrededor de un escudo), el panel de entrada
+deja elegir: usar solo la más grande, un contorno alrededor de todo o un set con un cortador y su sello por forma.
 
 ## Desarrollo
 

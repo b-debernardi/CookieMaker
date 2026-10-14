@@ -108,7 +108,7 @@ export function circlePoly(c: Pt, r: number, n = 16): Pt[] {
 /** Polylines thickened to width w with round joints and caps. */
 export function strokePolys(lines: Pt[][], closed: boolean[], w: number): Pt[][] {
   const out: Pt[][] = [];
-  const n = Math.max(8, Math.min(24, Math.round(w * 8)));
+  const n = Math.max(24, Math.min(64, Math.round(w * 16)));
   lines.forEach((pts, li) => {
     const segs = closed[li] ? pts.length : pts.length - 1;
     for (let i = 0; i < segs; i++) {
@@ -122,8 +122,10 @@ export function strokePolys(lines: Pt[][], closed: boolean[], w: number): Pt[][]
       const a2 = Math.atan2(next[1] - p[1], next[0] - p[0]);
       let turn = Math.abs(a2 - a1);
       if (turn > Math.PI) turn = 2 * Math.PI - turn;
-      // Round caps at the ends, and joints only where the line turns noticeably.
-      if (end || turn > 0.15) out.push(circlePoly(p, w / 2, n));
+      // Round caps at the ends and a round joint wherever the line turns:
+      // even a slight turn leaves a notch between two segments, and a curve
+      // made of many of them comes out with teeth.
+      if (end || turn > 1e-3) out.push(circlePoly(p, w / 2, n));
     });
   });
   return out;

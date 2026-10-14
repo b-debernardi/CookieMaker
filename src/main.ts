@@ -2,7 +2,7 @@ import './ui/styles.css';
 import GeoWorker from './geometry/worker?worker&inline';
 import { Viewer } from './viewer/viewer';
 import {
-  DEFAULTS, PIECES, SECTIONS, cloneParams,
+  DEFAULTS, PARTS_MODES, PIECES, SECTIONS, cloneParams,
   type FieldMeta, type FieldContext, type Params, type Piece, type Units,
 } from './model/params';
 import {
@@ -72,7 +72,10 @@ try {
 }
 
 let design: Design | null = null;
-let designAspect = 1; // height / width of the current design
+// Start from the saved proportions so nothing rescales before the first build.
+const savedAspect = state.params.sizeH / state.params.sizeW;
+let designAspect = isFinite(savedAspect) && savedAspect > 0 ? savedAspect : 1; // height / width of the design as built
+let sourceAspect = designAspect; // height / width of the whole input design
 let lastResult: BuildResult | null = null;
 let binPreview = '';
 
@@ -93,6 +96,7 @@ const pieceSeg = segmented(PIECES, state.piece, (v) => {
   state.piece = v;
   persistUi();
   refreshVisibility();
+  refreshPartsCard();
   requestBuild(true);
 }, 'pill wide');
 const topbar = h('div', { class: 'topbar glass' }, pieceSeg.el);
@@ -155,6 +159,32 @@ const views = h('div', { class: 'views glass' },
 );
 const toast = h('div', { class: 'toast glass', role: 'status' });
 
+// Separate shapes in the cutter + stamp set: pick what to do with them.
+const partsTitle = h('strong');
+const partsHint = h('div', { class: 'parts-hint' });
+const partsSeg = segmented(PARTS_MODES, state.params.partsMode, (v) => {
+  setParam('partsMode', v);
+  refreshPartsCard();
+}, 'pill');
+const partsCard = h('div', { class: 'parts-card', role: 'group', 'aria-label': 'Formas separadas', hidden: true },
+  h('div', { class: 'parts-head' },
+    h('span', { class: 'parts-icon', 'aria-hidden': 'true' }, 'i'),
+    h('div', {}, partsTitle, h('small', {}, 'Elegí qué hacer con ellas')),
+  ),
+  partsSeg.el,
+  partsHint,
+);
+
+function refreshPartsCard() {
+  const n = lastResult?.ok ? lastResult.shapes : 0;
+  const show = state.piece === 'set' && n > 1 && state.params.envelope === 'none';
+  partsCard.hidden = !show;
+  if (!show) return;
+  partsTitle.textContent = `Se detectaron ${n} formas separadas`;
+  partsSeg.set(state.params.partsMode);
+  partsHint.textContent = PARTS_MODES.find((m) => m.value === state.params.partsMode)!.hint;
+}
+
 stage.append(views);
 const syncInsets = () => {
   if (innerWidth <= 860) return viewer.setInsets(0, 0);
@@ -162,6 +192,7 @@ const syncInsets = () => {
   viewer.setInsets(l.right + 8, innerWidth - r.left + 8);
 };
 new ResizeObserver(syncInsets).observe(document.body);
+left.append(partsCard);
 app.append(stage, topbar, left, right, popover, bottombar, toast);
 
 // ---------- Input panel ----------
@@ -348,7 +379,7 @@ async function updateDesign(frame = false) {
   const bb = d && designBounds(d);
   if (bb) {
     const newAspect = (bb.maxY - bb.minY) / Math.max(1e-9, bb.maxX - bb.minX);
-    if (p.lockAspect && Math.abs(newAspect - designAspect) > 1e-6) {
+    if (p.lockAspect && Math.abs(newAspect - sourceAspect) > 1e-6) {
       // Keep the longest side when a new design comes in. Read it from the
       // saved size, not the aspect: after a reload the aspect starts at 1 and
       // the width alone would shrink the design a bit on every visit.
@@ -356,7 +387,7 @@ async function updateDesign(frame = false) {
       p.sizeW = round(newAspect > 1 ? longest / newAspect : longest, 2);
       p.sizeH = round(p.sizeW * newAspect, 2);
     }
-    designAspect = newAspect;
+    designAspect = sourceAspect = newAspect;
     rows.forEach((r) => r.update());
   }
   requestBuild(frame);
@@ -414,6 +445,18 @@ worker.onmessage = (ev: MessageEvent<BuildResult>) => {
   }
   setStatus(res.issues, true);
   updateBottom();
+  refreshPartsCard();
+  // "Largest only" builds part of the design: follow its proportions.
+  const p = state.params;
+  if (p.lockAspect && res.aspect > 0 && Math.abs(res.aspect / designAspect - 1) > 0.01) {
+    const longest = Math.max(p.sizeW, p.sizeH);
+    designAspect = res.aspect;
+    p.sizeW = round(designAspect > 1 ? longest / designAspect : longest, 2);
+    p.sizeH = round(p.sizeW * designAspect, 2);
+    rows.forEach((r) => r.update());
+    saveSession({ params: p, profile: state.profile });
+    requestBuild(true);
+  }
 };
 
 worker.onerror = (e) => {
