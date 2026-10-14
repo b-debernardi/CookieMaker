@@ -163,10 +163,17 @@ export interface PieceOut {
   name: string;
   part: M;
   issues: M[];
+  /** Printed nested in the previous piece, so it keeps its position. */
+  inPlace?: boolean;
+}
+
+interface CutterOut extends PieceOut {
+  /** Everything the cutter occupies seen from above (walls, base, bars). */
+  keepOut: CS;
 }
 
 /** Cutter or imprint cutter, built base-down and mirrored for printing. */
-function buildCutter(g: Geo, R: CS, p: Params, rel: Relief | null, issues: Issue[]): PieceOut {
+function buildCutter(g: Geo, R: CS, p: Params, rel: Relief | null, issues: Issue[]): CutterOut {
   const t = p.bladeThickness;
   const H = p.baseHeight + p.bladeDepth;
   const outward = !p.bladeInside;
@@ -252,7 +259,74 @@ function buildCutter(g: Geo, R: CS, p: Params, rel: Relief | null, issues: Issue
       if (m) issueSolids.push(mirror(m));
     }
   }
-  return { name: rel ? 'imprint' : 'cortador', part, issues: issueSolids };
+  const keepOut = g.union([footprint, wallAt(Math.max(t, p.tipWidth, t + p.extraThickness))]);
+  return { name: rel ? 'imprint' : 'cortador', part, issues: issueSolids, keepOut };
+}
+
+/**
+ * Stamp for the cutter + stamp set: a flat plate printed inside the cutter,
+ * with the relief on top. It shares the cutter's mirrored frame, so when the
+ * cutter is flipped to cut, the relief faces the dough and reads right.
+ */
+function buildInsetStamp(g: Geo, R: CS, cutter: CutterOut, p: Params, rel: Relief, issues: Issue[]): PieceOut {
+  // Plate: the cutting region minus the cutter (walls and any bars across
+  // the inside) grown by the clearance.
+  const gap = Math.max(0, p.setClearance);
+  const raw = g.sub(R, g.offset(cutter.keepOut, gap));
+  const minArea = Math.max(4, p.minThickness * p.minThickness * 4);
+  const parts = g.open(raw, Math.min(0.4, p.minThickness / 2)).decompose().map((c) => g.keep(c)).filter((c) => c.area() >= minArea);
+  if (!parts.length) {
+    throw new Error('La holgura con el cortador es mayor que la forma: el sello quedaría vacío.');
+  }
+  const So = g.union(parts);
+  if (parts.length > 1) {
+    issues.push({ level: 'info', text: `El sello quedó en ${parts.length} partes para no chocar con las paredes o puentes del cortador.` });
+  }
+
+  const Ls = g.open(g.inter(rel.lines, So), Math.min(0.4, p.minThickness / 2));
+  let d = p.reliefDepth;
+  if (Ls.isEmpty()) {
+    issues.push({ level: 'warn', text: 'El sello no tiene relieve: todas las líneas caen sobre bordes que corta el cortador.' });
+    d = 0;
+  }
+  let back = p.backing;
+  if (d < 0 && back <= -d) {
+    issues.push({ level: 'error', text: 'La placa tiene que ser más gruesa que el hundido; se ajustó a hundido + 1 mm.' });
+    back = -d + 1;
+  }
+
+  const solids: (M | null)[] = [];
+  // The plate sits on the bed, so the elephant foot compensation goes there.
+  const ef = p.efComp ? Math.min(p.efAmount, 0.6) : 0;
+  if (ef > 0 && back > 0.4) {
+    solids.push(g.extrude(g.offset(So, -ef / 2), 0, 0.2));
+    solids.push(g.extrude(So, 0.2, back));
+  } else {
+    solids.push(g.extrude(So, 0, back));
+  }
+  let part: M;
+  if (d >= 0) {
+    solids.push(g.extrude(Ls, back, back + d));
+    part = g.munion(solids);
+  } else {
+    const sunk = g.extrude(Ls, back + d, back + 1);
+    const plate = g.munion(solids);
+    part = sunk ? g.keep(plate.subtract(sunk)) : plate;
+  }
+
+  const top = back + Math.max(0, d);
+  const H = p.baseHeight + p.bladeDepth;
+  if (top > H) {
+    issues.push({ level: 'warn', text: `El sello (${top.toFixed(1)} mm) es más alto que el cortador (${H.toFixed(1)} mm).` });
+  }
+
+  const mirror = (m: M) => g.keep(m.mirror([1, 0, 0]));
+  const issueSolids: M[] = [];
+  for (const th of rel.thin) {
+    const m = g.extrude(g.offset(g.inter(th, So), 0.15), top + 0.05, top + 0.35);
+    if (m) issueSolids.push(mirror(m));
+  }
+  return { name: 'sello', part: mirror(part), issues: issueSolids, inPlace: true };
 }
 
 /** Stamp with an integrated tapered handle, built face-down. */
@@ -373,7 +447,34 @@ function segDist(q: Pt, a: Pt, b: Pt): number {
   return Math.hypot(q[0] - a[0] - t * dx, q[1] - a[1] - t * dy);
 }
 
-export function buildPieces(g: Geo, pr: Prepared, p: Params, piece: Piece, issues: Issue[]): PieceOut[] {
+/**
+ * One solid silhouette around every part of the design (a logo with laurels
+ * and stars around it, for example), so a stamp gets a single full plate and
+ * the parts become relief on it. Closes the gaps with growing radii and falls
+ * back to the convex hull.
+ */
+function mergeParts(g: Geo, outline: CS, p: Params, issues: Issue[]): CS {
+  const parts = outline.decompose().map((c) => g.keep(c)).filter((c) => c.area() >= 1);
+  if (parts.length <= 1) return outline;
+  const all = g.union(parts);
+  // Start wide enough to fill the slits between, say, a laurel and the shield,
+  // not just to connect the parts by a thin neck.
+  const bb = all.bounds();
+  const r0 = Math.max(2, 0.1 * Math.max(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1]));
+  for (const r of [r0, r0 * 2, r0 * 4]) {
+    const closed = g.simplify(g.fillHoles(g.offset(g.offset(all, r), -r)), Math.max(p.simplifyTol, 0.05));
+    if (closed.decompose().map((c) => g.keep(c)).filter((c) => c.area() >= 1).length === 1) {
+      issues.push({ level: 'info', text: `Las ${parts.length} partes del diseño se unieron en una sola placa; el detalle queda en relieve.` });
+      return closed;
+    }
+  }
+  issues.push({ level: 'info', text: `Las ${parts.length} partes del diseño están muy separadas; se unieron con su contorno convexo.` });
+  return g.keep(all.hull());
+}
+
+export function buildPieces(g: Geo, pr0: Prepared, p: Params, piece: Piece, issues: Issue[]): PieceOut[] {
+  const merge = p.mergeParts && p.envelope === 'none' && piece === 'stamp';
+  const pr = merge ? { ...pr0, outline: mergeParts(g, pr0.outline, p, issues) } : pr0;
   const cutRegion = p.cutMode === 'holes' && p.envelope === 'none' ? pr.dark : pr.outline;
   if (p.bladeThickness < p.minThickness) {
     issues.push({ level: 'warn', text: `La pared de corte (${p.bladeThickness} mm) es más fina que el mínimo de ${p.minThickness} mm.` });
@@ -397,7 +498,8 @@ export function buildPieces(g: Geo, pr: Prepared, p: Params, piece: Piece, issue
       return [buildStamp(g, pr.outline, p, relief(g, pr, p, issues), issues)];
     case 'set': {
       const cutter = buildCutter(g, cutRegion, p, null, issues);
-      const stamp = buildStamp(g, cutRegion, p, relief(g, pr, p, issues), issues);
+      const stamp = buildInsetStamp(g, cutRegion, cutter, p, relief(g, pr, p, issues), issues);
+      issues.push({ level: 'info', text: 'El sello se imprime adentro del cortador, con el relieve hacia arriba.' });
       return [cutter, stamp];
     }
   }

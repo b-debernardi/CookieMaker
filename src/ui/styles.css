@@ -358,6 +358,9 @@ select.select {
   cursor: pointer;
   max-width: 11rem;
 }
+/* The open list is drawn by the system: give it opaque colours, or Windows
+   shows the inherited light text on a white list in dark mode. */
+select.select option { background-color: var(--bg); color: var(--text); }
 
 .more {
   display: grid;
@@ -519,7 +522,7 @@ textarea.text-in:focus { box-shadow: 0 0 0 2px var(--blue); }
 .empty-note { padding: 0.625rem 0.75rem; font-size: 0.8125rem; color: var(--text-2); }
 
 .profile-bar { display: flex; align-items: center; gap: 0.375rem; padding: 0 1rem 0.5rem; }
-.profile-bar select { flex: 1; max-width: none; }
+.profile-bar select { flex: 1; min-width: 0; max-width: none; }
 .modified { font-size: 0.6875rem; color: var(--orange); font-weight: 600; white-space: nowrap; }
 
 .lock {
@@ -539,6 +542,119 @@ textarea.text-in:focus { box-shadow: 0 0 0 2px var(--blue); }
 .lock[aria-pressed='true'] { color: var(--accent); }
 .size-row { display: flex; align-items: center; gap: 0.375rem; }
 .size-row .num input { width: 2.75rem; }
+
+/* ---------- Image editor ---------- */
+
+.ed-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.28);
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+.ed-backdrop.open { opacity: 1; }
+.ed-sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(60rem, 100%);
+  height: min(46rem, 100%);
+  border-radius: 1.375rem;
+  overflow: hidden;
+  transform: scale(0.96) translateY(0.5rem);
+  transition: transform 420ms var(--spring);
+}
+.ed-backdrop.open .ed-sheet { transform: none; }
+.ed-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem 0.5rem;
+}
+.ed-head > :first-child { justify-self: start; }
+.ed-head > :last-child { justify-self: end; }
+.ed-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.25rem 0.875rem 0.625rem;
+}
+.ed-group { display: flex; align-items: center; gap: 0.375rem; }
+.ed-label { font-size: 0.8125rem; color: var(--text-2); }
+.ed-spacer { flex: 1; }
+.ed-area {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  margin: 0 0.875rem;
+  border-radius: 0.875rem;
+  background:
+    repeating-conic-gradient(var(--fill) 0% 25%, transparent 0% 50%) 50% / 1.25rem 1.25rem,
+    var(--card);
+  overflow: hidden;
+}
+.ed-frame {
+  position: relative;
+  touch-action: none;
+  box-shadow: var(--shadow-sm);
+  cursor: none;
+}
+.ed-sheet[data-tool='crop'] .ed-frame { cursor: crosshair; }
+.ed-frame canvas { display: block; width: 100%; height: 100%; }
+.ed-crop {
+  position: absolute;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45), 0 0 0 0.5px rgba(0, 0, 0, 0.4) inset;
+  cursor: move;
+  pointer-events: none;
+}
+.ed-frame { overflow: hidden; }
+.ed-handle {
+  position: absolute;
+  width: 1.375rem;
+  height: 1.375rem;
+  pointer-events: auto;
+}
+.ed-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0.3125rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  transition: transform 120ms ease-out;
+}
+.ed-handle:active::after { transform: scale(1.2); }
+.ed-handle.nw { left: -0.6875rem; top: -0.6875rem; cursor: nwse-resize; }
+.ed-handle.ne { right: -0.6875rem; top: -0.6875rem; cursor: nesw-resize; }
+.ed-handle.sw { left: -0.6875rem; bottom: -0.6875rem; cursor: nesw-resize; }
+.ed-handle.se { right: -0.6875rem; bottom: -0.6875rem; cursor: nwse-resize; }
+.ed-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  border: 1px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.ed-sheet[data-tool='eraser'] .ed-ring { border-style: dashed; }
+.ed-foot { padding: 0.5rem 1rem 0.75rem; font-size: 0.75rem; color: var(--text-2); text-align: center; }
+
+.edit-btn { margin-top: 0.5rem; width: 100%; }
+
+@media (max-width: 640px) {
+  .ed-backdrop { padding: 0; }
+  .ed-sheet { border-radius: 0; height: 100%; }
+  .ed-spacer { display: none; }
+}
 
 /* ---------- Narrower desktops: lift the view buttons above the bottom bar ---------- */
 

@@ -13,6 +13,7 @@ const waitResult = async (prev) => {
 let r = await waitResult(-1);
 await page.getByRole('button', { name: 'Imagen', exact: true }).click();
 await page.locator('input[type=file]').setInputFiles(process.argv[3]);
+await page.getByRole('button', { name: 'Usar imagen', exact: true }).click();
 r = await waitResult(r.id);
 console.log('image cutter', JSON.stringify(r));
 await page.screenshot({ path: out + '/6-image-cutter.png' });

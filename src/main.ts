@@ -17,6 +17,7 @@ import { SAMPLES } from './input/samples';
 import { toStl } from './export/stl';
 import { to3mf } from './export/threemf';
 import { download, h, segmented, select, setRangeFill, toggle } from './ui/controls';
+import { isImageEditorOpen, openImageEditor } from './ui/imageEditor';
 
 // ---------- State ----------
 
@@ -31,6 +32,8 @@ interface State {
   svgText: string;
   svgName: string;
   image: ImageBitmap | null;
+  /** The image as loaded, before any edit. */
+  imageOriginal: ImageBitmap | null;
   imageName: string;
   text: string;
   fontId: string;
@@ -39,6 +42,11 @@ interface State {
 }
 
 const session = loadSession();
+// Sizes saved while the design kept shrinking on reload: start over.
+if (session && Math.max(session.params.sizeW, session.params.sizeH) < 10) {
+  session.params.sizeW = DEFAULTS.sizeW;
+  session.params.sizeH = DEFAULTS.sizeH;
+}
 const state: State = {
   source: 'svg',
   piece: 'cutter',
@@ -48,6 +56,7 @@ const state: State = {
   svgText: SAMPLES[0].svg,
   svgName: SAMPLES[0].label,
   image: null,
+  imageOriginal: null,
   imageName: '',
   text: 'Hola',
   fontId: 'fredoka',
@@ -109,11 +118,16 @@ const unitsSeg = segmented<Units>([{ value: 'mm', label: 'mm' }, { value: 'in', 
 });
 const profileSelect = h('select', { class: 'select', 'aria-label': 'Perfil' });
 const modifiedTag = h('span', { class: 'modified' });
+const revertBtn = h('button', {
+  class: 'btn small', type: 'button', title: 'Volver a los valores guardados del perfil', hidden: true,
+  onClick: () => onRevertProfile(),
+}, 'Revertir');
 const right = h('aside', { class: 'right glass', 'aria-label': 'Parámetros' },
   h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, 'Ajustes'), unitsSeg.el),
   h('div', { class: 'profile-bar' },
     profileSelect,
     modifiedTag,
+    revertBtn,
     h('button', { class: 'btn small', type: 'button', onClick: () => onSaveProfile() }, 'Guardar'),
   ),
   rightScroll,
@@ -168,7 +182,7 @@ function renderLeft() {
   leftScroll.replaceChildren();
   if (state.source === 'svg') {
     leftScroll.append(
-      dropZone('Elegir un SVG', 'o arrastralo a cualquier parte', '.svg,image/svg+xml'),
+      dropZone('Elegir un SVG', 'o arrastralo o pegalo con Ctrl+V', '.svg,image/svg+xml'),
       h('div', { class: 'file-name' }, state.svgName),
       h('div', { class: 'group-title' }, 'Ejemplos'),
       h('div', { class: 'chips' }, SAMPLES.map((s) =>
@@ -176,8 +190,11 @@ function renderLeft() {
       )),
     );
   } else if (state.source === 'image') {
-    leftScroll.append(dropZone('Elegir una imagen', 'PNG o JPG; mejor una silueta o un dibujo con líneas limpias', 'image/*'));
+    leftScroll.append(dropZone('Elegir una imagen', 'o pegala con Ctrl+V. Mejor una silueta o un dibujo con líneas limpias', 'image/*'));
     if (state.imageName) leftScroll.append(h('div', { class: 'file-name' }, state.imageName));
+    if (state.image) {
+      leftScroll.append(h('button', { class: 'btn small edit-btn', type: 'button', onClick: () => editImage() }, 'Editar imagen'));
+    }
     if (binPreview) {
       leftScroll.append(h('div', { class: 'preview' },
         h('img', { src: binPreview, alt: 'Vista binarizada' }),
@@ -231,7 +248,11 @@ async function loadFile(file: File) {
       state.fontId = file.name;
       setSource('text');
     } else if (file.type.startsWith('image/')) {
-      state.image = await createImageBitmap(file);
+      const original = await createImageBitmap(file);
+      const edited = await openImageEditor(original);
+      if (!edited) return; // cancelled: keep whatever was there
+      state.imageOriginal = original;
+      state.image = edited;
       state.imageName = file.name;
       setSource('image');
     } else {
@@ -241,6 +262,14 @@ async function loadFile(file: File) {
     showToast(`No se pudo abrir ${file.name}`);
     console.error(e);
   }
+}
+
+async function editImage() {
+  if (!state.image || isImageEditorOpen()) return;
+  const edited = await openImageEditor(state.image, state.imageOriginal ?? state.image);
+  if (!edited) return;
+  state.image = edited;
+  updateDesign(true);
 }
 
 function setSource(s: Source) {
@@ -259,13 +288,34 @@ function setSource(s: Source) {
 }
 
 // Drag and drop anywhere on the page.
-window.addEventListener('dragover', (e) => { e.preventDefault(); document.querySelector('.drop')?.classList.add('over'); });
+window.addEventListener('dragover', (e) => { e.preventDefault(); if (isImageEditorOpen()) return; document.querySelector('.drop')?.classList.add('over'); });
 window.addEventListener('dragleave', () => document.querySelector('.drop')?.classList.remove('over'));
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   document.querySelector('.drop')?.classList.remove('over');
   const f = e.dataTransfer?.files?.[0];
-  if (f) loadFile(f);
+  if (f && !isImageEditorOpen()) loadFile(f);
+});
+
+// Paste an image (or SVG code) copied from anywhere, without saving it first.
+window.addEventListener('paste', (e) => {
+  if (isImageEditorOpen()) return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && (t as HTMLInputElement).type === 'text'))) return;
+  const cd = e.clipboardData;
+  if (!cd) return;
+  const file = [...cd.files].find((f) => f.type.startsWith('image/'));
+  if (file) {
+    e.preventDefault();
+    const ext = file.type.split('/')[1]?.replace('svg+xml', 'svg') || 'png';
+    loadFile(file.name && file.name !== 'image.png' ? file : new File([file], `imagen-pegada.${ext}`, { type: file.type }));
+    return;
+  }
+  const text = cd.getData('text/plain').trim();
+  if (/^(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(text)) {
+    e.preventDefault();
+    loadFile(new File([text], 'svg-pegado.svg', { type: 'image/svg+xml' }));
+  }
 });
 
 // ---------- Design ----------
@@ -299,8 +349,10 @@ async function updateDesign(frame = false) {
   if (bb) {
     const newAspect = (bb.maxY - bb.minY) / Math.max(1e-9, bb.maxX - bb.minX);
     if (p.lockAspect && Math.abs(newAspect - designAspect) > 1e-6) {
-      // Keep the longest side when a new design comes in.
-      const longest = Math.max(p.sizeW, p.sizeW * designAspect);
+      // Keep the longest side when a new design comes in. Read it from the
+      // saved size, not the aspect: after a reload the aspect starts at 1 and
+      // the width alone would shrink the design a bit on every visit.
+      const longest = Math.max(p.sizeW, p.sizeH);
       p.sizeW = round(newAspect > 1 ? longest / newAspect : longest, 2);
       p.sizeH = round(p.sizeW * newAspect, 2);
     }
@@ -711,12 +763,7 @@ profileSelect.addEventListener('change', () => {
     state.profile = BASE_PROFILE;
   } else {
     state.profile = v;
-    state.params = applyProfile(v, state.params);
-    viewer.buildBed(state.params.bedSize);
-    viewer.setEdges(state.params.showEdges);
-    rows.forEach((r) => r.update());
-    refreshVisibility();
-    requestBuild();
+    loadProfileParams();
     showToast(`Perfil “${v}” aplicado`);
   }
   saveSession({ params: state.params, profile: state.profile });
@@ -737,8 +784,27 @@ function onSaveProfile(asNew = false) {
   showToast(`Perfil “${name}” guardado`);
 }
 
+function loadProfileParams() {
+  state.params = applyProfile(state.profile, state.params);
+  viewer.buildBed(state.params.bedSize);
+  viewer.setEdges(state.params.showEdges);
+  rows.forEach((r) => r.update());
+  refreshVisibility();
+  requestBuild();
+}
+
+/** Drops the unsaved changes and goes back to the profile's saved values. */
+function onRevertProfile() {
+  loadProfileParams();
+  saveSession({ params: state.params, profile: state.profile });
+  refreshProfile();
+  showToast(`Cambios de “${state.profile}” revertidos`);
+}
+
 function refreshProfile() {
-  modifiedTag.textContent = isModified(state.profile, state.params) ? 'Modificado' : '';
+  const modified = isModified(state.profile, state.params);
+  modifiedTag.textContent = modified ? 'Modificado' : '';
+  revertBtn.hidden = !modified;
 }
 
 function persistUi() {

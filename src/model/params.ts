@@ -49,6 +49,8 @@ export interface Params {
   // Stamp
   backing: number;
   clearance: number;
+  setClearance: number;
+  mergeParts: boolean;
   reliefDepth: number;
   efComp: boolean;
   efAmount: number;
@@ -110,6 +112,8 @@ export const DEFAULTS: Params = {
 
   backing: 5.5,
   clearance: 0.9,
+  setClearance: 0.5,
+  mergeParts: true,
   reliefDepth: 3,
   efComp: true,
   efAmount: 0.2,
@@ -252,8 +256,14 @@ export const SECTIONS: SectionMeta[] = [
     fields: [
       { key: 'reliefDepth', label: 'Profundidad de relieve', kind: 'len', min: -5, max: 8, step: 0.1,
         hint: 'Negativa = hundido.' },
-      { key: 'backing', label: 'Respaldo', kind: 'len', min: 1, max: 15, step: 0.1 },
-      { key: 'clearance', label: 'Holgura con el cortador', kind: 'len', min: 0, max: 3, step: 0.05 },
+      { key: 'backing', label: 'Respaldo', kind: 'len', min: 1, max: 15, step: 0.1, when: (_p, c) => c.piece === 'stamp' },
+      { key: 'backing', label: 'Grosor de la placa', kind: 'len', min: 1, max: 15, step: 0.1, when: (_p, c) => c.piece === 'set' },
+      { key: 'clearance', label: 'Holgura con el cortador', kind: 'len', min: 0, max: 3, step: 0.05,
+        when: (_p, c) => c.piece === 'stamp' },
+      { key: 'setClearance', label: 'Holgura con el cortador', kind: 'len', min: 0.2, max: 3, step: 0.05,
+        when: (_p, c) => c.piece === 'set', hint: 'Espacio entre el sello y la pared del cortador. Con menos de 0.4 mm pueden pegarse al imprimir.' },
+      { key: 'mergeParts', label: 'Placa completa', kind: 'bool', when: (_p, c) => c.piece === 'stamp',
+        hint: 'Una sola placa que rodea todo el dibujo; las partes sueltas quedan en relieve sobre ella.' },
       { key: 'invertRelief', label: 'Invertir relieve', kind: 'bool', adv: true },
       { key: 'eraseBorder', label: 'Borrar borde exterior', kind: 'bool', adv: true },
       { key: 'imprintThickness', label: 'Engrosar líneas', kind: 'len', min: -1, max: 2, step: 0.05, adv: true },
@@ -265,7 +275,7 @@ export const SECTIONS: SectionMeta[] = [
   {
     id: 'handle',
     title: 'Mango cónico',
-    pieces: STAMPS,
+    pieces: ['stamp'],
     fields: [
       { key: 'towerHeight', label: 'Altura', kind: 'len', min: 5, max: 60, step: 0.5 },
       { key: 'capDiameter', label: 'Diámetro de tapa', kind: 'len', min: 5, max: 40, step: 0.5 },

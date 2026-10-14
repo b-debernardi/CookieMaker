@@ -40,28 +40,42 @@ async function build(req: BuildRequest): Promise<BuildResult> {
     }
     const pieces = buildPieces(g, pr, req.params, req.piece, issues);
 
-    // Lay pieces side by side, centred on the bed.
+    // Lay pieces side by side, centred on the bed. A piece printed inside the
+    // previous one stays where it is and shares its slot.
     const boxes = pieces.map((pc) => pc.part.boundingBox());
-    const widths = boxes.map((b) => b.max[0] - b.min[0]);
-    const total = widths.reduce((a, b) => a + b, 0) + PIECE_GAP * (pieces.length - 1);
+    const slots: { pieces: number[]; min: number; max: number }[] = [];
+    pieces.forEach((pc, i) => {
+      const b = boxes[i];
+      const last = slots[slots.length - 1];
+      if (pc.inPlace && last) {
+        last.pieces.push(i);
+        last.min = Math.min(last.min, b.min[0]);
+        last.max = Math.max(last.max, b.max[0]);
+      } else {
+        slots.push({ pieces: [i], min: b.min[0], max: b.max[0] });
+      }
+    });
+    const total = slots.reduce((a, s) => a + s.max - s.min, 0) + PIECE_GAP * (slots.length - 1);
     let x = -total / 2;
     const meshes: MeshOut[] = [];
     let minY = Infinity, maxY = -Infinity, maxZ = 0;
-    pieces.forEach((pc, i) => {
-      const b = boxes[i];
-      const dx = x - b.min[0];
-      const status = pc.part.status();
-      if (status !== 'NoError') issues.push({ level: 'error', text: `La malla de ${pc.name} no es válida (${status}).` });
-      if (pc.part.isEmpty()) issues.push({ level: 'error', text: `La pieza ${pc.name} quedó vacía.` });
-      meshes.push(toMesh(pc.part, pc.name, 'part', dx));
-      for (const im of pc.issues) meshes.push(toMesh(im, pc.name, 'issue', dx));
-      minY = Math.min(minY, b.min[1]);
-      maxY = Math.max(maxY, b.max[1]);
-      maxZ = Math.max(maxZ, b.max[2]);
-      x += widths[i] + PIECE_GAP;
-    });
+    for (const slot of slots) {
+      const dx = x - slot.min;
+      for (const i of slot.pieces) {
+        const pc = pieces[i], b = boxes[i];
+        const status = pc.part.status();
+        if (status !== 'NoError') issues.push({ level: 'error', text: `La malla de ${pc.name} no es válida (${status}).` });
+        if (pc.part.isEmpty()) issues.push({ level: 'error', text: `La pieza ${pc.name} quedó vacía.` });
+        meshes.push(toMesh(pc.part, pc.name, 'part', dx));
+        for (const im of pc.issues) meshes.push(toMesh(im, pc.name, 'issue', dx));
+        minY = Math.min(minY, b.min[1]);
+        maxY = Math.max(maxY, b.max[1]);
+        maxZ = Math.max(maxZ, b.max[2]);
+      }
+      x += slot.max - slot.min + PIECE_GAP;
+    }
     const size: [number, number, number] = [total, maxY - minY, maxZ];
-    if (pieces.length > 1 && (total > req.params.bedSize || size[1] > req.params.bedSize)) {
+    if (slots.length > 1 && (total > req.params.bedSize || size[1] > req.params.bedSize)) {
       issues.push({ level: 'warn', text: `Las dos piezas juntas no entran en la cama de ${req.params.bedSize} mm; exportalas por separado.` });
     }
     return { id: req.id, ok: true, meshes, issues, size, ms: performance.now() - t0 };
