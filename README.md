@@ -14,6 +14,8 @@ Abrí `CookieMaker.html` con doble clic. Es un solo archivo, sin servidor ni con
 3. Ajustá los parámetros a la derecha. En "Simple" están el tamaño y los pocos ajustes que más se usan para
    esa pieza; "Avanzado" muestra todo (base, filo, puentes, zonas, perfil de impresora, unidades).
    El umbral y el invertir de una imagen están a la izquierda, junto a la imagen.
+   Ancho y alto se miden por fuera de la hoja de corte, como se mide un cortante terminado (la base, más
+   ancha, no cuenta). Un sello suelto del mismo tamaño entra en ese cortante.
 4. Para ajustar solo una parte del relieve, agregá una zona en "Modificadores" (Avanzado) y arrastrala en la
    vista 3D: adentro de la zona vale su propio grosor mínimo y afuera el ajuste general.
 5. Revisá los avisos en la barra de abajo y exportá a 3MF o STL.
@@ -26,7 +28,7 @@ Abrí `CookieMaker.html` con doble clic. Es un solo archivo, sin servidor ni con
 - Buscador por nombre o categoría y filtros por categoría y por pieza.
 - Al tocar un cortante se abren sus versiones (una por tamaño y pieza: 4 cm, 8 cm, 15 cm…). Desde ahí se bajan
   el STL y los parámetros, se abre una versión en Diseñar, o se genera un tamaño nuevo a partir del SVG guardado
-  con los parámetros de otra versión. El tamaño es el lado más largo del diseño.
+  con los parámetros de otra versión. El tamaño es el lado más largo, medido por fuera de la hoja de corte.
 - Guardar otra vez el mismo tamaño y pieza reemplaza esa versión en vez de duplicarla.
 
 Los cortadores se muestran espejados a propósito: se imprimen con la base sobre la cama y, al darlos vuelta

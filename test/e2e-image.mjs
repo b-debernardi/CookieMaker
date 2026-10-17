@@ -11,7 +11,7 @@ const waitResult = async (prev) => {
   return page.evaluate(() => { const r = window.cookiemaker.result; return { id: r.id, ok: r.ok, size: r.size.map((v) => +v.toFixed(1)), issues: r.issues.map((i) => i.level + ': ' + i.text) }; });
 };
 let r = await waitResult(-1);
-await page.getByRole('button', { name: 'Imagen', exact: true }).click();
+await page.getByRole('button', { name: '+ Nuevo diseño' }).click();
 await page.locator('input[type=file]').setInputFiles(process.argv[3]);
 await page.getByRole('button', { name: 'Usar imagen', exact: true }).click();
 r = await waitResult(r.id);

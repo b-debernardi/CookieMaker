@@ -354,6 +354,19 @@ export const PIECES: { value: Piece; label: string }[] = [
 ];
 
 /**
+ * How far the outside of the cutting wall sits past the design on each side,
+ * mm. The size the user enters is measured there, like a finished cutter is
+ * measured, so the design itself is drawn this much smaller. The stamp uses
+ * the cutter's margin so a stamp and a cutter of the same size fit together.
+ */
+export function cutMargin(p: Params, piece: Piece): number {
+  const wall = p.bladeInside ? 0 : p.bladeThickness;
+  const gap = piece === 'set' ? Math.max(0, p.setClearance) : 0;
+  const pad = p.envelope !== 'none' && !(piece === 'imprint' && p.edgesOnly) ? p.envelopePad : 0;
+  return wall + gap + pad;
+}
+
+/**
  * The few settings used most for each piece. "Simple" mode shows only these
  * (plus the size); everything else waits in "Avanzado".
  */

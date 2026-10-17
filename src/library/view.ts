@@ -353,7 +353,7 @@ export function createLibrary(hooks: LibraryHooks) {
       result.className = 'result';
       result.textContent = `Generando ${sizeLabel(size)} · ${PIECE_LABEL[piece]}`;
       try {
-        const params = paramsAtSize(base.params, size);
+        const params = paramsAtSize(base.params, size, base.piece, piece);
         const out = await generate(item.svg, params, piece);
         const same = versions.find((v) => v.piece === piece && Math.round(v.size) === Math.round(size));
         await putVersion({

@@ -6,7 +6,7 @@
 
 import polylabel from 'polylabel';
 import type { Design, Pt } from '../input/types';
-import type { Modifier, Params, Piece } from '../model/params';
+import { cutMargin, type Modifier, type Params, type Piece } from '../model/params';
 import { Geo, strokePolys } from './ops';
 import { autoBridges, manualBar } from './bridges';
 import type { CS, M } from './wasm';
@@ -73,16 +73,20 @@ export function prepare(g: Geo, d: Design, p: Params, issues: Issue[], piece: Pi
     }
   }
 
-  // Scale so the design fits the requested size, centred on the origin.
+  // Scale so the outside of the cutting wall measures the requested size,
+  // centred on the origin. The wall (and envelope, and the set's clearance)
+  // grow the design by a fixed margin, so the design gets the size minus it.
   const bb = dark0.bounds();
   const w = bb.max[0] - bb.min[0], h = bb.max[1] - bb.min[1];
   if (w < EPS || h < EPS) return null;
+  const m = 2 * cutMargin(p, piece);
+  const inner = (v: number) => Math.max(1, v - m);
   let sx: number, sy: number;
   if (p.lockAspect) {
-    sx = sy = p.sizeW / w;
+    sx = sy = inner(p.sizeW) / w;
   } else {
-    sx = p.sizeW / w;
-    sy = p.sizeH / h;
+    sx = inner(p.sizeW) / w;
+    sy = inner(p.sizeH) / h;
   }
   const cx = (bb.min[0] + bb.max[0]) / 2, cy = (bb.min[1] + bb.max[1]) / 2;
   const fx = p.mirror ? -sx : sx;
@@ -109,7 +113,7 @@ export function prepare(g: Geo, d: Design, p: Params, issues: Issue[], piece: Pi
   let edgeLines = g.union(bands);
   if (mask) edgeLines = g.inter(edgeLines, g.offset(tf(mask), lw));
 
-  if (sx * w > p.bedSize || sy * h > p.bedSize) {
+  if (sx * w + m > p.bedSize || sy * h + m > p.bedSize) {
     issues.push({ level: 'error', text: `El diseño no entra en la cama de ${p.bedSize} mm.` });
   }
   return { dark, outline, edgeLines, shapes, aspect: h / w };

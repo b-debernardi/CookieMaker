@@ -32,7 +32,8 @@ for (const [label, file] of [['Imprint', '2-imprint'], ['Sello', '3-stamp'], ['C
 // Text input
 await page.getByRole('button', { name: 'Cortador', exact: true }).click();
 r = await waitResult(r.id);
-await page.getByRole('button', { name: 'Texto', exact: true }).click();
+await page.getByRole('button', { name: '+ Nuevo diseño' }).click();
+await page.getByRole('button', { name: 'Escribir un texto' }).click();
 r = await waitResult(r.id);
 await page.getByRole('textbox', { name: 'Texto' }).fill('OAB');
 r = await waitResult(r.id);

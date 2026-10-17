@@ -2,7 +2,7 @@ import './ui/styles.css';
 import GeoWorker from './geometry/worker?worker&inline';
 import { Viewer } from './viewer/viewer';
 import {
-  DEFAULTS, ESSENTIALS, IMAGE_KEYS, PARTS_MODES, PIECES, SECTIONS, cloneParams,
+  DEFAULTS, ESSENTIALS, IMAGE_KEYS, PARTS_MODES, PIECES, SECTIONS, cloneParams, cutMargin,
   type FieldMeta, type FieldContext, type Params, type Piece, type Units,
 } from './model/params';
 import {
@@ -84,6 +84,11 @@ let design: Design | null = null;
 const savedAspect = state.params.sizeH / state.params.sizeW;
 let designAspect = isFinite(savedAspect) && savedAspect > 0 ? savedAspect : 1; // height / width of the design as built
 let sourceAspect = designAspect; // height / width of the whole input design
+// Sizes are measured outside the cutting wall. That margin doesn't grow with
+// the design, so keeping the proportion works on what is inside it.
+const wallMargin = () => 2 * cutMargin(state.params, state.piece);
+const heightFor = (w: number, a = designAspect) => { const m = wallMargin(); return Math.max(0, w - m) * a + m; };
+const widthFor = (hh: number, a = designAspect) => { const m = wallMargin(); return Math.max(0, hh - m) / a + m; };
 let lastResult: BuildResult | null = null;
 let binPreview = '';
 
@@ -141,6 +146,7 @@ const header = h('header', { class: 'bar' },
 const pieceSeg = segmented(PIECES, state.piece, (v) => {
   state.piece = v;
   persistUi();
+  sizeRows.forEach((r) => r.update());
   refreshVisibility();
   refreshPartsCard();
   requestBuild(true);
@@ -486,8 +492,8 @@ async function updateDesign(frame = false) {
       // saved size, not the aspect: after a reload the aspect starts at 1 and
       // the width alone would shrink the design a bit on every visit.
       const longest = Math.max(p.sizeW, p.sizeH);
-      p.sizeW = round(newAspect > 1 ? longest / newAspect : longest, 2);
-      p.sizeH = round(p.sizeW * newAspect, 2);
+      p.sizeW = round(newAspect > 1 ? widthFor(longest, newAspect) : longest, 2);
+      p.sizeH = round(heightFor(p.sizeW, newAspect), 2);
     }
     designAspect = sourceAspect = newAspect;
     rows.forEach((r) => r.update());
@@ -553,8 +559,8 @@ worker.onmessage = (ev: MessageEvent<BuildResult>) => {
   if (p.lockAspect && res.aspect > 0 && Math.abs(res.aspect / designAspect - 1) > 0.01) {
     const longest = Math.max(p.sizeW, p.sizeH);
     designAspect = res.aspect;
-    p.sizeW = round(designAspect > 1 ? longest / designAspect : longest, 2);
-    p.sizeH = round(p.sizeW * designAspect, 2);
+    p.sizeW = round(designAspect > 1 ? widthFor(longest) : longest, 2);
+    p.sizeH = round(heightFor(p.sizeW), 2);
     rows.forEach((r) => r.update());
     saveSession({ params: p, profile: state.profile });
     requestBuild(true);
@@ -886,6 +892,9 @@ interface RowHandle {
   update(): void;
 }
 const rows: RowHandle[] = [];
+const sizeRows: RowHandle[] = [];
+// Settings that move the outside of the cutting wall, where sizes are measured.
+const MARGIN_PARAMS = new Set<keyof Params>(['bladeThickness', 'bladeInside', 'setClearance', 'envelope', 'envelopePad', 'edgesOnly']);
 const sectionEls = new Map<string, HTMLElement>();
 const moreEls = new Map<string, HTMLElement>();
 
@@ -903,6 +912,7 @@ function setParam<K extends keyof Params>(key: K, value: Params[K]) {
   if (IMAGE_KEYS.includes(key)) unlink();
   if (key === 'bedSize') viewer.buildBed(value as number);
   if (key === 'showEdges') viewer.setEdges(value as boolean);
+  if (MARGIN_PARAMS.has(key)) sizeRows.forEach((r) => r.update());
   refreshVisibility();
   refreshProfile();
   saveSession({ params: state.params, profile: state.profile });
@@ -976,7 +986,7 @@ function sizeRow(): RowHandle {
     class: 'lock', type: 'button', title: 'Mantener proporción',
     onClick: () => {
       state.params.lockAspect = !state.params.lockAspect;
-      if (state.params.lockAspect) state.params.sizeH = round(state.params.sizeW * designAspect, 2);
+      if (state.params.lockAspect) state.params.sizeH = round(heightFor(state.params.sizeW), 2);
       update();
       setParam('lockAspect', state.params.lockAspect);
     },
@@ -988,10 +998,10 @@ function sizeRow(): RowHandle {
     const p = state.params;
     if (which === 'w') {
       p.sizeW = round(v, 3);
-      if (p.lockAspect) p.sizeH = round(v * designAspect, 3);
+      if (p.lockAspect) p.sizeH = round(heightFor(v), 3);
     } else {
       p.sizeH = round(v, 3);
-      if (p.lockAspect) p.sizeW = round(v / designAspect, 3);
+      if (p.lockAspect) p.sizeW = round(widthFor(v), 3);
     }
     update();
     setParam('sizeW', p.sizeW);
@@ -1007,12 +1017,16 @@ function sizeRow(): RowHandle {
       lock,
       h('label', { class: 'size-field' }, h('small', {}, 'Alto'), h('span', { class: 'num' }, hh, uh)),
     ),
-    h('div', { class: 'hint' }, 'Medidas del diseño, del lado de corte.'),
+    h('div', { class: 'hint' }, 'Por fuera de la hoja de corte, como se mide un cortante.'),
   );
   const update = () => {
     const p = state.params;
     const d = state.units === 'in' ? 3 : 1;
-    if (p.lockAspect) p.sizeH = round(p.sizeW * designAspect, 3);
+    // Keep the longest side when the wall margin changes (piece, thickness).
+    if (p.lockAspect) {
+      if (designAspect > 1) p.sizeW = round(widthFor(p.sizeH), 3);
+      else p.sizeH = round(heightFor(p.sizeW), 3);
+    }
     w.value = String(round(toDisplay(mW, p.sizeW), d));
     hh.value = String(round(toDisplay(mW, p.sizeH), d));
     uw.textContent = uh.textContent = state.units;
@@ -1022,7 +1036,9 @@ function sizeRow(): RowHandle {
       : '<svg width="12" height="14" viewBox="0 0 12 14" aria-hidden="true"><rect x="1" y="6" width="10" height="7" rx="1.6" fill="currentColor"/><path d="M3.2 6V4.2a2.8 2.8 0 0 1 5.4-1" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
   };
   update();
-  return { el, section: 'design', update };
+  const row = { el, section: 'design', update };
+  sizeRows.push(row);
+  return row;
 }
 
 function bridgesBlock(): RowHandle {
