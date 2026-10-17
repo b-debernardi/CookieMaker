@@ -6,7 +6,7 @@
 
 import polylabel from 'polylabel';
 import type { Design, Pt } from '../input/types';
-import type { Params, Piece } from '../model/params';
+import type { Modifier, Params, Piece } from '../model/params';
 import { Geo, strokePolys } from './ops';
 import { autoBridges, manualBar } from './bridges';
 import type { CS, M } from './wasm';
@@ -137,7 +137,7 @@ function envelope(g: Geo, outline: CS, p: Params): CS {
 }
 
 /** Parts thinner than `w`, ignoring the specks every sharp corner leaves. */
-function thinParts(g: Geo, a: CS, w: number): CS[] {
+export function thinParts(g: Geo, a: CS, w: number): CS[] {
   // Drop the hairline slivers a slightly uneven edge leaves behind, or a
   // line that is wide enough gets thickened in beads along its sides.
   const rest = g.open(g.sub(a, g.open(a, w * 0.98)), Math.min(0.1, w * 0.2));
@@ -145,9 +145,57 @@ function thinParts(g: Geo, a: CS, w: number): CS[] {
   return rest.decompose().map((c) => g.keep(c)).filter((c) => c.area() > w * w * 0.6);
 }
 
+/**
+ * Brings thin parts up to the minimum width w without overshooting. Thin
+ * parts grow in small steps and each spot stops as soon as it is wide
+ * enough, so a tapering tip ends up as wide as the line leading to it
+ * instead of a blob (growing every thin part by w/2 at once did that).
+ */
+export function thicken(g: Geo, L: CS, thin: CS[], w: number, only?: (t: CS[]) => CS[]): CS {
+  let cur = L;
+  const grownAll: CS[] = [];
+  const step = w / 10;
+  for (let round = 0; round < 7 && thin.length; round++) {
+    const grown = g.union(thin.map((t) => g.offset(t, step)));
+    grownAll.push(grown);
+    // Simplify each round: offsets of offsets pile up arc vertices fast.
+    cur = g.simplify(g.union([cur, grown]), 0.01);
+    thin = thinParts(g, cur, w);
+    if (only) thin = only(thin);
+  }
+  // Smooth the small step between a thickened part and the line it hangs
+  // from: fill the notches a light closing finds, but only real ones next to
+  // what grew (hairline slivers elsewhere would show as seams).
+  const r = w / 4;
+  const zone = g.offset(g.union(grownAll), w);
+  const fill = g.open(g.sub(g.offset(g.offset(cur, r), -r), cur), 0.05)
+    .decompose().map((c) => g.keep(c)).filter((c) => !g.inter(c, zone).isEmpty());
+  return fill.length ? g.union([cur, ...fill]) : cur;
+}
+
 interface Relief {
   lines: CS;
   thin: CS[];
+}
+
+/** The area a modifier covers, in the design frame (mm, centred, +y up). */
+export function modifierRegion(g: Geo, m: Modifier): CS {
+  const w = Math.max(0.5, m.w), h = Math.max(0.5, m.h);
+  const base = m.shape === 'circle'
+    ? g.keep(g.keep(g.w.CrossSection.circle(0.5, 64)).scale([w, h]))
+    : g.keep(g.w.CrossSection.square([w, h], true));
+  return g.keep(base.translate([m.x, m.y]));
+}
+
+/** Translucent volumes that show where the modifiers are, over a piece. */
+function modifierSolids(g: Geo, p: Params, part: M, mirrored: boolean): PieceOut['mods'] {
+  if (!p.modifiers.length) return [];
+  const b = part.boundingBox();
+  return p.modifiers.map((m, index) => {
+    let solid = g.extrude(modifierRegion(g, m), b.min[2] - 0.3, b.max[2] + 0.3)!;
+    if (mirrored) solid = g.keep(solid.mirror([1, 0, 0]));
+    return { index, mirrored, m: solid };
+  });
 }
 
 /** Relief region shared by the imprint cutter and the stamp. */
@@ -164,25 +212,64 @@ function relief(g: Geo, pr: Prepared, p: Params, issues: Issue[]): Relief {
   }
   if (p.imprintThickness) L = g.offset(L, p.imprintThickness);
   L = g.inter(L, pr.outline);
+
+  // Minimum thickness: modifier zones use their own setting inside them, the
+  // global one applies everywhere else. Everything is thickened on the whole
+  // drawing (never cut and glued back, which leaves seams).
   const w = p.minThickness;
-  let thin = thinParts(g, L, w);
-  if (thin.length && p.forceMinThickness) {
-    const fixed = g.inter(g.union([L, ...thin.map((t) => g.offset(t, w / 2))]), pr.outline);
-    // Drop leftovers that still can't be printed (dust from tiny details).
-    const parts = fixed.decompose().map((c) => g.keep(c));
-    const keep = parts.filter((c) => c.area() >= w * w);
+  const zones = p.modifiers.map((m) => ({ m, R: modifierRegion(g, m) }));
+  const anyZone = zones.length ? g.union(zones.map((z) => z.R)) : null;
+  const clip = (list: CS[], inside: CS | null, outside: CS | null) => list
+    .map((t) => (inside ? g.inter(t, inside) : t))
+    .map((t) => (outside ? g.sub(t, outside) : t))
+    .filter((t) => !t.isEmpty() && t.area() > 0.02);
+  let fixed = 0;
+  let cur = L;
+  for (const { m, R } of zones) {
+    if (!m.forceMinThickness) continue;
+    const thin = clip(thinParts(g, cur, m.minThickness), R, null);
+    if (!thin.length) continue;
+    fixed += thin.length;
+    cur = thicken(g, cur, thin, m.minThickness, (t) => clip(t, R, null));
+  }
+  if (p.forceMinThickness) {
+    const thin = clip(thinParts(g, cur, w), null, anyZone);
+    if (thin.length) {
+      fixed += thin.length;
+      cur = thicken(g, cur, thin, w, (t) => clip(t, null, anyZone));
+    }
+  }
+  if (fixed) {
+    // Drop leftovers that still can't be printed (dust from tiny details),
+    // only where thickening was asked for.
+    const forced = (c: CS) => {
+      const z = zones.find((x) => !g.inter(c, x.R).isEmpty());
+      return z ? z.m.forceMinThickness : p.forceMinThickness;
+    };
+    const parts = g.inter(cur, pr.outline).decompose().map((c) => g.keep(c));
+    const keep = parts.filter((c) => {
+      const z = zones.find((x) => !g.inter(c, x.R).isEmpty());
+      const wz = z ? z.m.minThickness : w;
+      return c.area() >= wz * wz || !forced(c);
+    });
     const dropped = parts.length - keep.length;
     issues.push({
       level: 'info',
-      text: `Se engrosaron ${thin.length} ${thin.length === 1 ? 'línea fina' : 'líneas finas'} a ${w} mm` +
+      text: `Se engrosaron ${fixed} ${fixed === 1 ? 'línea fina' : 'líneas finas'}` +
+        (zones.length ? '' : ` a ${w} mm`) +
         (dropped ? ` y se descartaron ${dropped} ${dropped === 1 ? 'detalle' : 'detalles'} demasiado chicos.` : '.'),
     });
     L = g.union(keep);
-    thin = [];
-  } else if (thin.length) {
+  }
+  // Warn (in red) only where thickening is off.
+  const thin = [
+    ...(p.forceMinThickness ? [] : clip(thinParts(g, L, w), null, anyZone)),
+    ...zones.filter((z) => !z.m.forceMinThickness).flatMap((z) => clip(thinParts(g, L, z.m.minThickness), z.R, null)),
+  ];
+  if (thin.length) {
     issues.push({
       level: 'warn',
-      text: `${thin.length} ${thin.length === 1 ? 'zona del relieve es más fina' : 'zonas del relieve son más finas'} que ${w} mm (en rojo).`,
+      text: `${thin.length} ${thin.length === 1 ? 'zona del relieve es más fina' : 'zonas del relieve son más finas'} que el grosor mínimo (en rojo).`,
     });
   }
   return { lines: L, thin };
@@ -194,6 +281,8 @@ export interface PieceOut {
   issues: M[];
   /** Printed nested in the previous piece, so it keeps its position. */
   inPlace?: boolean;
+  /** Modifier zones drawn over this piece (index into params.modifiers). */
+  mods?: { index: number; mirrored: boolean; m: M }[];
 }
 
 interface CutterOut extends PieceOut {
@@ -289,7 +378,7 @@ function buildCutter(g: Geo, R: CS, p: Params, rel: Relief | null, issues: Issue
     }
   }
   const keepOut = g.union([footprint, wallAt(Math.max(t, p.tipWidth, t + p.extraThickness))]);
-  return { name: rel ? 'imprint' : 'cortador', part, issues: issueSolids, keepOut };
+  return { name: rel ? 'imprint' : 'cortador', part, issues: issueSolids, keepOut, mods: rel ? modifierSolids(g, p, part, true) : [] };
 }
 
 /**
@@ -298,10 +387,11 @@ function buildCutter(g: Geo, R: CS, p: Params, rel: Relief | null, issues: Issue
  * cutter is flipped to cut, the relief faces the dough and reads right.
  */
 function buildInsetStamp(g: Geo, R: CS, cutter: CutterOut, p: Params, rel: Relief, issues: Issue[]): PieceOut {
-  // Plate: the cutting region minus the cutter (walls and any bars across
-  // the inside) grown by the clearance.
+  // Plate: the whole cutting region. The cutter was built around it, moved
+  // out by the clearance, so only bars across the inside (or an inward blade)
+  // take anything away; the small margin keeps the plate's edge untouched.
   const gap = Math.max(0, p.setClearance);
-  const raw = g.sub(R, g.offset(cutter.keepOut, gap));
+  const raw = g.sub(R, g.offset(cutter.keepOut, Math.max(0, gap - 0.01)));
   const minArea = Math.max(4, p.minThickness * p.minThickness * 4);
   const parts = g.open(raw, Math.min(0.4, p.minThickness / 2)).decompose().map((c) => g.keep(c)).filter((c) => c.area() >= minArea);
   if (!parts.length) {
@@ -355,7 +445,8 @@ function buildInsetStamp(g: Geo, R: CS, cutter: CutterOut, p: Params, rel: Relie
     const m = g.extrude(g.offset(g.inter(th, So), 0.15), top + 0.05, top + 0.35);
     if (m) issueSolids.push(mirror(m));
   }
-  return { name: 'sello', part: mirror(part), issues: issueSolids, inPlace: true };
+  const placed = mirror(part);
+  return { name: 'sello', part: placed, issues: issueSolids, inPlace: true, mods: modifierSolids(g, p, placed, true) };
 }
 
 /** Stamp with an integrated tapered handle, built face-down. */
@@ -436,7 +527,8 @@ function buildStamp(g: Geo, R: CS, p: Params, rel: Relief, issues: Issue[]): Pie
     const m = g.extrude(g.offset(g.inter(th, So), 0.15), -0.35, -0.05);
     if (m) issueSolids.push(m);
   }
-  return { name: 'sello', part: g.munion(solids), issues: issueSolids };
+  const part = g.munion(solids);
+  return { name: 'sello', part, issues: issueSolids, mods: modifierSolids(g, p, part, false) };
 }
 
 function towerSpot(g: Geo, So: CS, p: Params): { c: Pt; rin: number } {
@@ -501,6 +593,14 @@ function mergeParts(g: Geo, outline: CS, p: Params, issues: Issue[]): CS {
   return g.keep(all.hull());
 }
 
+/**
+ * Where the set's cutter cuts: the design moved out by the clearance, so the
+ * gap comes from the cutter and the stamp keeps the design's full size.
+ */
+function setCutRegion(g: Geo, R: CS, p: Params): CS {
+  return g.offset(R, Math.max(0, p.setClearance));
+}
+
 /** Cutter + stamp set, following the chosen way to handle separate shapes. */
 function buildSet(g: Geo, pr: Prepared, cutRegion: CS, p: Params, issues: Issue[]): PieceOut[] {
   const several = pr.shapes > 1 && p.envelope === 'none';
@@ -509,7 +609,7 @@ function buildSet(g: Geo, pr: Prepared, cutRegion: CS, p: Params, issues: Issue[
     const merged = mergeParts(g, pr.outline, p, issues);
     const prm = { ...pr, outline: merged };
     const R = merged;
-    const cutter = buildCutter(g, R, p, null, issues);
+    const cutter = buildCutter(g, setCutRegion(g, R, p), p, null, issues);
     const stamp = buildInsetStamp(g, R, cutter, p, relief(g, prm, p, issues), issues);
     issues.push({ level: 'info', text: 'El sello se imprime adentro del cortador, con el relieve hacia arriba.' });
     return [cutter, stamp];
@@ -523,7 +623,7 @@ function buildSet(g: Geo, pr: Prepared, cutRegion: CS, p: Params, issues: Issue[
     shapes.forEach((shape, i) => {
       const R = g.inter(cutRegion, shape);
       const local: Issue[] = [];
-      const cutter = buildCutter(g, R, p, null, local);
+      const cutter = buildCutter(g, setCutRegion(g, R, p), p, null, local);
       cutter.name = `cortador ${i + 1}`;
       out.push(cutter);
       try {
@@ -541,7 +641,7 @@ function buildSet(g: Geo, pr: Prepared, cutRegion: CS, p: Params, issues: Issue[
     }
     return out;
   }
-  const cutter = buildCutter(g, cutRegion, p, null, issues);
+  const cutter = buildCutter(g, setCutRegion(g, cutRegion, p), p, null, issues);
   const stamp = buildInsetStamp(g, cutRegion, cutter, p, relief(g, pr, p, issues), issues);
   issues.push({ level: 'info', text: 'El sello se imprime adentro del cortador, con el relieve hacia arriba.' });
   return [cutter, stamp];

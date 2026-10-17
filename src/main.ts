@@ -742,6 +742,83 @@ function bridgesBlock(): RowHandle {
   return { el, section: 'bridges', update };
 }
 
+function modifiersBlock(): RowHandle {
+  const list = h('div');
+  const el = h('div', {}, list);
+  const u = () => state.units;
+  const toUnit = (v: number) => (u() === 'in' ? round(v / 25.4, 3) : round(v, 2));
+  const fromUnit = (v: number) => (u() === 'in' ? v * 25.4 : v);
+  const changed = () => setParam('modifiers', state.params.modifiers);
+  const update = () => {
+    list.replaceChildren();
+    const mods = state.params.modifiers;
+    if (!mods.length) {
+      list.append(h('div', { class: 'empty-note' },
+        'Zonas con su propio grosor mínimo, como los modificadores de un slicer. Fuera de ellas vale el ajuste general de Avanzado.'));
+    }
+    mods.forEach((m, i) => {
+      const num = (label: string, key: 'x' | 'y' | 'w' | 'h' | 'minThickness') => {
+        const inp = h('input', {
+          type: 'text', inputmode: 'decimal', 'aria-label': `Zona ${i + 1}: ${label}`, value: String(toUnit(m[key])),
+          onChange: () => {
+            const v = parseFloat(inp.value.replace(',', '.'));
+            if (!isFinite(v)) return update();
+            m[key] = key === 'x' || key === 'y' ? fromUnit(v) : Math.max(key === 'minThickness' ? 0.2 : 0.5, fromUnit(v));
+            changed();
+            update();
+          },
+          onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') inp.blur(); },
+        });
+        return h('label', { class: 'mod-field' }, h('span', {}, label), h('span', { class: 'num' }, inp, h('span', {}, u())));
+      };
+      const shape = segmented([{ value: 'circle', label: 'Círculo' }, { value: 'rect', label: 'Rectángulo' }], m.shape, (v) => {
+        m.shape = v as 'circle' | 'rect';
+        changed();
+      });
+      const force = toggle(m.forceMinThickness, (v) => { m.forceMinThickness = v; changed(); }, `Zona ${i + 1}: forzar grosor mínimo`);
+      list.append(h('div', { class: 'mod-card' },
+        h('div', { class: 'mod-head' },
+          h('span', { class: 'mod-dot', 'aria-hidden': 'true' }),
+          h('strong', {}, `Zona ${i + 1}`),
+          h('button', {
+            class: 'btn icon x', type: 'button', 'aria-label': `Quitar zona ${i + 1}`,
+            onClick: () => { mods.splice(i, 1); changed(); update(); },
+          }, '✕'),
+        ),
+        shape.el,
+        h('div', { class: 'mod-grid' }, num('X', 'x'), num('Y', 'y'), num('Ancho', 'w'), num('Alto', 'h')),
+        h('div', { class: 'row' }, h('span', { class: 'label' }, 'Forzar grosor mínimo'), force.el),
+        num('Grosor mínimo', 'minThickness'),
+      ));
+    });
+    list.append(h('div', { class: 'row' },
+      h('span', { class: 'label' }, mods.length ? 'Arrastrá las zonas en la vista 3D' : 'Zonas'),
+      h('button', {
+        class: 'btn small', type: 'button',
+        onClick: () => {
+          const p = state.params;
+          const size = Math.round(Math.max(8, Math.min(p.sizeW, p.sizeH) / 4));
+          mods.push({ shape: 'circle', x: 0, y: 0, w: size, h: size, forceMinThickness: true, minThickness: p.minThickness });
+          changed();
+          update();
+        },
+      }, 'Agregar zona'),
+    ));
+  };
+  update();
+  return { el, section: 'modifiers', update };
+}
+
+// Dragging a zone in the 3D view moves it.
+viewer.onModifierMove = (index, dx, dy) => {
+  const m = state.params.modifiers[index];
+  if (!m) return;
+  m.x = round(m.x + dx, 2);
+  m.y = round(m.y + dy, 2);
+  rows.find((r) => r.section === 'modifiers' && !r.key)?.update();
+  setParam('modifiers', state.params.modifiers);
+};
+
 function buildPanel() {
   for (const sec of SECTIONS) {
     const main = h('div', { class: 'group' });
@@ -757,6 +834,7 @@ function buildPanel() {
       add(r, m.adv);
     }
     if (sec.id === 'bridges') add(bridgesBlock(), true);
+    if (sec.id === 'modifiers') add(modifiersBlock());
     const hasAdv = moreInner.childElementCount > 0;
     if (hasAdv) {
       const btn = h('button', {

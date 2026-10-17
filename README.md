@@ -11,7 +11,9 @@ Abrí `CookieMaker.html` con doble clic. Es un solo archivo, sin servidor ni con
    un editor para recortarla, pintar con distintos grosores y borrar con la goma antes de trazarla.
 2. Elegí la pieza arriba: Cortador, Imprint, Sello o Cortador + sello.
 3. Ajustá los parámetros a la derecha. Lo menos usado está en "Más opciones".
-4. Revisá los avisos en la barra de abajo y exportá a 3MF o STL.
+4. Para ajustar solo una parte del relieve, agregá una zona en "Modificadores" y arrastrala en la vista 3D:
+   adentro de la zona vale su propio grosor mínimo y afuera el ajuste general.
+5. Revisá los avisos en la barra de abajo y exportá a 3MF o STL.
 
 Los cortadores se muestran espejados a propósito: se imprimen con la base sobre la cama y, al darlos vuelta
 para cortar, el diseño queda al derecho. El sello se imprime con la cara sobre la cama.

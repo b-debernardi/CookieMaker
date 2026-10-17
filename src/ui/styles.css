@@ -543,6 +543,33 @@ textarea.text-in:focus { box-shadow: 0 0 0 2px var(--blue); }
 .size-row { display: flex; align-items: center; gap: 0.375rem; }
 .size-row .num input { width: 2.75rem; }
 
+/* ---------- Modifier zones ---------- */
+
+.mod-card {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem 0.25rem;
+  position: relative;
+}
+.mod-card + .mod-card::before, .mod-card + .row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0.75rem;
+  right: 0;
+  border-top: 0.5px solid var(--sep);
+}
+.mod-card .row { padding: 0.25rem 0; min-height: 2.25rem; }
+.mod-card .row::before { display: none; }
+.mod-head { display: flex; align-items: center; gap: 0.5rem; }
+.mod-head strong { flex: 1; font-size: 0.875rem; font-weight: 600; }
+.mod-head .x { padding: 0.25rem 0.5rem; }
+.mod-dot { width: 0.625rem; height: 0.625rem; border-radius: 0.1875rem; background: #a970ff; }
+.mod-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.375rem 0.5rem; }
+.mod-field { display: flex; align-items: center; justify-content: space-between; gap: 0.375rem; font-size: 0.8125rem; }
+.mod-field .num input { width: 2.75rem; }
+.mod-card > .mod-field { padding-bottom: 0.375rem; }
+
 /* ---------- Separate shapes card ---------- */
 
 .parts-card {
