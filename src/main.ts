@@ -148,16 +148,11 @@ const pieceSeg = segmented(PIECES, state.piece, (v) => {
 const topbar = h('div', { class: 'topbar float' }, pieceSeg.el);
 
 const leftScroll = h('div', { class: 'scroll' });
-const sourceSeg = segmented<Source>(
-  [{ value: 'svg', label: 'SVG' }, { value: 'image', label: 'Imagen' }, { value: 'text', label: 'Texto' }],
-  state.source,
-  (v) => setSource(v),
-);
+const newBtn = h('button', { class: 'btn small new-btn', type: 'button', onClick: () => setNewOpen(true) }, '+ Nuevo diseño');
 // Shown while the editor holds a cutter opened from (or saved to) the library.
 const linkCard = h('div', { class: 'link-card', hidden: true });
 const left = h('aside', { class: 'left sidebar', 'aria-label': 'Diseño' },
-  h('h2', {}, 'Diseño'),
-  sourceSeg.el,
+  h('div', { class: 'left-head' }, h('h2', {}, 'Diseño'), newBtn),
   leftScroll,
   linkCard,
 );
@@ -278,35 +273,54 @@ function dropZone(title: string, sub: string, accept: string): HTMLElement {
   return z;
 }
 
+/** The "new design" chooser: hidden until asked for, closed again once something is loaded. */
+let newOpen = false;
+let focusText = false;
+function setNewOpen(open: boolean) {
+  newOpen = open;
+  renderLeft();
+}
+
+const SOURCE_LABEL: Record<Source, string> = { svg: 'SVG', image: 'Imagen', text: 'Texto' };
+
 function renderLeft() {
   leftScroll.replaceChildren();
-  if (state.source === 'svg') {
-    leftScroll.append(
-      dropZone('Elegir un SVG', 'o arrastralo o pegalo con Ctrl+V', '.svg,image/svg+xml'),
-      h('div', { class: 'file-name' }, state.svgName),
+  newBtn.hidden = newOpen;
+  if (newOpen || (state.source === 'image' && !state.image)) {
+    leftScroll.append(h('div', { class: 'new-design' },
+      h('div', { class: 'nd-head' },
+        h('h3', {}, 'Nuevo diseño'),
+        h('button', { class: 'text small', type: 'button', onClick: () => setNewOpen(false) }, 'Cancelar'),
+      ),
+      dropZone('Elegir un archivo', 'SVG, PNG o JPG. También podés arrastrarlo o pegarlo con Ctrl+V', '.svg,image/svg+xml,image/*'),
+      h('button', { class: 'secondary nd-text', type: 'button', onClick: () => { newOpen = false; focusText = true; setSource('text'); } }, 'Escribir un texto'),
       h('div', { class: 'group-title' }, 'Ejemplos'),
       h('div', { class: 'chips' }, SAMPLES.map((s) =>
-        h('button', { class: 'btn small', type: 'button', onClick: () => { state.svgText = s.svg; state.svgName = s.label; unlink(); renderLeft(); updateDesign(); } }, s.label),
+        h('button', {
+          class: 'btn small', type: 'button',
+          onClick: () => { state.svgText = s.svg; state.svgName = s.label; newOpen = false; unlink(); if (state.source === 'svg') { renderLeft(); updateDesign(true); } else setSource('svg'); },
+        }, s.label),
       )),
-    );
+    ));
+  }
+
+  // What is loaded now, with only the settings that belong to it.
+  if (state.source === 'svg') {
+    leftScroll.append(designCard(svgDataUrl(state.svgText), state.svgName));
   } else if (state.source === 'image') {
-    leftScroll.append(dropZone('Elegir una imagen', 'o pegala con Ctrl+V. Mejor una silueta o un dibujo con líneas limpias', 'image/*'));
-    if (state.imageName) leftScroll.append(h('div', { class: 'file-name' }, state.imageName));
-    if (state.image) {
-      leftScroll.append(h('button', { class: 'btn small edit-btn', type: 'button', onClick: () => editImage() }, 'Editar imagen'));
-    }
-    if (binPreview) {
-      leftScroll.append(h('div', { class: 'preview' },
-        h('img', { src: binPreview, alt: 'Vista binarizada' }),
-        h('div', { class: 'cap' }, 'Así lee la imagen el trazado'),
-      ));
-    }
-    if (state.image) leftScroll.append(h('div', { class: 'group image-opts' }, ...imageRows.map((r) => r.el)));
+    if (!state.image) return;
+    leftScroll.append(
+      designCard(binPreview, state.imageName, h('button', { class: 'btn small', type: 'button', onClick: () => editImage() }, 'Editar imagen')),
+      h('div', { class: 'group image-opts' }, ...imageRows.map((r) => r.el)),
+    );
   } else {
     const ta = h('textarea', {
       class: 'text-in', 'aria-label': 'Texto', value: state.text, rows: 2,
       onInput: () => { state.text = ta.value; unlink(); updateDesign(); },
     });
+    ta.value = state.text; // a textarea takes its text as a property, not an attribute
+    if (focusText) requestAnimationFrame(() => { ta.focus(); ta.select(); });
+    focusText = false;
     const fontSel = select(
       [...BUILTIN_FONTS.map((f) => ({ value: f.id, label: f.label })), ...(customFonts.map((f) => ({ value: f, label: f })))],
       state.fontId,
@@ -320,6 +334,7 @@ function renderLeft() {
     const spacingVal = h('span', { class: 'label', style: { color: 'var(--text-2)' } }, String(state.letterSpacing));
     setRangeFill(spacing);
     leftScroll.append(
+      h('div', { class: 'kind' }, SOURCE_LABEL.text),
       ta,
       h('div', { class: 'group', style: { marginTop: '0.75rem' } },
         h('div', { class: 'row' }, h('span', { class: 'label' }, 'Fuente'), fontSel),
@@ -333,6 +348,19 @@ function renderLeft() {
   }
 }
 
+function designCard(src: string, name: string, action?: HTMLElement): HTMLElement {
+  return h('div', { class: 'design-card' },
+    h('div', { class: 'dc-ph' }, src ? h('img', { src, alt: '' }) : null),
+    h('div', { class: 'dc-meta' },
+      h('small', {}, SOURCE_LABEL[state.source]),
+      h('b', { title: name }, name || 'Sin nombre'),
+      action ?? null,
+    ),
+  );
+}
+
+const svgDataUrl = (svg: string) => (svg ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}` : '');
+
 const customFonts: string[] = [];
 
 async function loadFile(file: File) {
@@ -343,6 +371,7 @@ async function loadFile(file: File) {
     if (name.endsWith('.svg') || file.type === 'image/svg+xml') {
       state.svgText = await file.text();
       state.svgName = file.name;
+      newOpen = false;
       setSource('svg');
     } else if (/\.(ttf|otf|woff)$/.test(name)) {
       registerFont(file.name, await file.arrayBuffer());
@@ -356,6 +385,7 @@ async function loadFile(file: File) {
       state.imageOriginal = original;
       state.image = edited;
       state.imageName = file.name;
+      newOpen = false;
       setSource('image');
     } else {
       showToast('Ese tipo de archivo no se puede usar');
@@ -379,7 +409,6 @@ function setSource(s: Source, keepParams = false) {
   const changed = s !== state.source;
   if (changed && !keepParams) unlink();
   state.source = s;
-  sourceSeg.set(s);
   // Text usually wants every hole cut (O, A, B); drawings only the outline.
   if (changed && !keepParams) {
     state.params.cutMode = s === 'text' ? 'holes' : 'outline';
@@ -974,11 +1003,11 @@ function sizeRow(): RowHandle {
   const el = h('div', { class: 'row' },
     h('span', { class: 'label' }, 'Tamaño'),
     h('div', { class: 'size-row' },
-      h('span', { class: 'num' }, w, uw),
+      h('label', { class: 'size-field' }, h('small', {}, 'Ancho'), h('span', { class: 'num' }, w, uw)),
       lock,
-      h('span', { class: 'num' }, hh, uh),
+      h('label', { class: 'size-field' }, h('small', {}, 'Alto'), h('span', { class: 'num' }, hh, uh)),
     ),
-    h('div', { class: 'hint' }, 'Ancho y alto del diseño, del lado de corte.'),
+    h('div', { class: 'hint' }, 'Medidas del diseño, del lado de corte.'),
   );
   const update = () => {
     const p = state.params;

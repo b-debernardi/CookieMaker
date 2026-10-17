@@ -36,6 +36,7 @@ await page.getByRole('button', { name: 'STL', exact: true }).click();
 await page.waitForTimeout(1500);
 
 // A second cutter, exported directly.
+await page.getByRole('button', { name: '+ Nuevo diseño' }).click();
 await page.getByRole('button', { name: 'Estrella', exact: true }).click();
 id = await waitResult(id);
 await page.getByRole('button', { name: 'Cortador', exact: true }).click();

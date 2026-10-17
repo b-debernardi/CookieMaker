@@ -7,8 +7,9 @@ Convierte un SVG, una imagen o un texto en STL o 3MF.
 
 Abrí `CookieMaker.html` con doble clic. Es un solo archivo, sin servidor ni conexión a internet.
 
-1. Elegí la entrada: SVG, imagen o texto (o arrastrá un archivo a la página). Al cargar una imagen se abre
-   un editor para recortarla, pintar con distintos grosores y borrar con la goma antes de trazarla.
+1. A la izquierda se ve el diseño cargado. Con "+ Nuevo diseño" elegís un archivo (SVG, PNG o JPG), escribís
+   un texto o usás un ejemplo; también podés arrastrar o pegar un archivo en cualquier momento. Al cargar una
+   imagen se abre un editor para recortarla, pintar con distintos grosores y borrar con la goma antes de trazarla.
 2. Elegí la pieza arriba: Cortador, Imprint, Sello o Cortador + sello.
 3. Ajustá los parámetros a la derecha. En "Simple" están el tamaño y los pocos ajustes que más se usan para
    esa pieza; "Avanzado" muestra todo (base, filo, puentes, zonas, perfil de impresora, unidades).
