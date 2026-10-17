@@ -12,7 +12,10 @@ export interface BuildRequest {
 
 export interface MeshOut {
   name: string;
-  role: 'part' | 'issue';
+  role: 'part' | 'issue' | 'modifier';
+  /** For modifiers: which one, and whether its piece is mirrored. */
+  mod?: number;
+  mirrored?: boolean;
   positions: Float32Array;
   indices: Uint32Array;
 }

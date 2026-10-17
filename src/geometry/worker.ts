@@ -87,6 +87,9 @@ async function build(req: BuildRequest): Promise<BuildResult> {
         if (pc.part.isEmpty()) issues.push({ level: 'error', text: `La pieza ${pc.name} quedó vacía.` });
         meshes.push(toMesh(pc.part, pc.name, 'part', s.dx - cx, s.dy - cy));
         for (const im of pc.issues) meshes.push(toMesh(im, pc.name, 'issue', s.dx - cx, s.dy - cy));
+        for (const md of pc.mods ?? []) {
+          meshes.push({ ...toMesh(md.m, pc.name, 'modifier', s.dx - cx, s.dy - cy), mod: md.index, mirrored: md.mirrored });
+        }
         maxZ = Math.max(maxZ, boxes[i].max[2]);
       }
     }

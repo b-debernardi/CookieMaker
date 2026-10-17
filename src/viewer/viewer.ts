@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { MeshOut } from '../geometry/protocol';
 
 const PART_COLORS = [0xe3a96b, 0x8fb8de];
+const MODIFIER_COLOR = 0xa970ff;
 
 export class Viewer {
   private renderer: THREE.WebGLRenderer;
@@ -22,6 +23,11 @@ export class Viewer {
   private last = performance.now();
   /** Screen space covered by floating panels on the left and right, in px. */
   private insets = { left: 0, right: 0 };
+  private modMeshes: THREE.Mesh[] = [];
+  private ray = new THREE.Raycaster();
+  private drag: { mesh: THREE.Mesh; plane: THREE.Plane; start: THREE.Vector3 } | null = null;
+  /** Called when a modifier zone is dropped: index and move in design mm. */
+  onModifierMove: (index: number, dx: number, dy: number) => void = () => {};
 
   constructor(private host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
@@ -51,6 +57,13 @@ export class Viewer {
     rim.position.set(-200, 150, 80);
     this.scene.add(rim);
     this.scene.add(this.bed, this.content);
+
+    // Modifier zones can be dragged on the plate. Listen on the host in the
+    // capture phase so the camera controls never see a drag that is ours.
+    host.addEventListener('pointerdown', (e) => this.onDown(e), true);
+    host.addEventListener('pointermove', (e) => this.onMove(e), true);
+    host.addEventListener('pointerup', (e) => this.onUp(e), true);
+    host.addEventListener('pointercancel', (e) => this.onUp(e), true);
 
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
@@ -106,6 +119,65 @@ export class Viewer {
     };
   }
 
+  private pick(e: PointerEvent): THREE.Intersection | null {
+    if (!this.modMeshes.length) return null;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.ray.setFromCamera(ndc, this.camera);
+    return this.ray.intersectObjects(this.modMeshes, false)[0] ?? null;
+  }
+
+  private planePoint(e: PointerEvent, plane: THREE.Plane): THREE.Vector3 | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this.ray.setFromCamera(ndc, this.camera);
+    return this.ray.ray.intersectPlane(plane, new THREE.Vector3());
+  }
+
+  private onDown(e: PointerEvent) {
+    if (e.button !== 0 || e.target !== this.renderer.domElement) return;
+    const hit = this.pick(e);
+    if (!hit) return;
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -hit.point.z);
+    this.drag = { mesh: hit.object as THREE.Mesh, plane, start: hit.point.clone() };
+    this.controls.enabled = false;
+    this.renderer.domElement.setPointerCapture(e.pointerId);
+    this.renderer.domElement.style.cursor = 'grabbing';
+    e.stopPropagation();
+  }
+
+  private onMove(e: PointerEvent) {
+    if (!this.drag) {
+      this.renderer.domElement.style.cursor = e.buttons === 0 && this.pick(e) ? 'grab' : '';
+      return;
+    }
+    const p = this.planePoint(e, this.drag.plane);
+    if (!p) return;
+    const d = p.sub(this.drag.start);
+    // Move every copy of this zone (one per piece) together.
+    const index = this.drag.mesh.userData.mod;
+    for (const m of this.modMeshes) {
+      if (m.userData.mod !== index) continue;
+      const sign = m.userData.mirrored === this.drag.mesh.userData.mirrored ? 1 : -1;
+      m.position.set(d.x * sign, d.y, 0);
+    }
+    this.needsRender = true;
+    e.stopPropagation();
+  }
+
+  private onUp(e: PointerEvent) {
+    if (!this.drag) return;
+    const { mesh } = this.drag;
+    this.drag = null;
+    this.controls.enabled = true;
+    this.renderer.domElement.style.cursor = '';
+    const dx = mesh.position.x, dy = mesh.position.y;
+    if (Math.hypot(dx, dy) > 0.01) {
+      this.onModifierMove(mesh.userData.mod, mesh.userData.mirrored ? -dx : dx, dy);
+    }
+    e.stopPropagation();
+  }
+
   setInsets(left: number, right: number) {
     if (left === this.insets.left && right === this.insets.right) return;
     this.insets = { left, right };
@@ -137,7 +209,7 @@ export class Viewer {
     const plate = new THREE.Mesh(
       new THREE.PlaneGeometry(size, size),
       new THREE.MeshStandardMaterial({
-        color: this.dark ? 0x2a2a2e : 0xf2f0ed,
+        color: this.dark ? 0x2b2f35 : 0xf5f7f9,
         roughness: 0.95,
         transparent: true,
         opacity: 0.9,
@@ -152,7 +224,7 @@ export class Viewer {
     }
     const grid = new THREE.LineSegments(
       new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(lines, 3)),
-      new THREE.LineBasicMaterial({ color: this.dark ? 0x3d3d42 : 0xdcd8d2 }),
+      new THREE.LineBasicMaterial({ color: this.dark ? 0x3b4048 : 0xd9dee4 }),
     );
     this.bed.add(grid);
     this.needsRender = true;
@@ -175,6 +247,9 @@ export class Viewer {
       });
     }
     this.content.clear();
+    this.modMeshes = [];
+    this.drag = null;
+    this.controls.enabled = true;
     let part = 0;
     for (const m of meshes) {
       const geo = new THREE.BufferGeometry();
@@ -183,12 +258,29 @@ export class Viewer {
       const flat = geo.toNonIndexed();
       flat.computeVertexNormals();
       geo.dispose();
+      if (m.role === 'modifier') {
+        const mesh = new THREE.Mesh(
+          flat,
+          new THREE.MeshBasicMaterial({ color: MODIFIER_COLOR, transparent: true, opacity: 0.22, depthWrite: false }),
+        );
+        mesh.renderOrder = 5;
+        mesh.userData = { mod: m.mod, mirrored: m.mirrored };
+        const edges = new THREE.LineSegments(
+          new THREE.EdgesGeometry(flat, 35),
+          new THREE.LineBasicMaterial({ color: MODIFIER_COLOR, transparent: true, opacity: 0.8 }),
+        );
+        mesh.add(edges);
+        this.modMeshes.push(mesh);
+        this.content.add(mesh);
+        continue;
+      }
       if (m.role === 'issue') {
         const mesh = new THREE.Mesh(
           flat,
           new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.9, depthTest: false }),
         );
         mesh.renderOrder = 10;
+        mesh.userData.issue = true;
         this.content.add(mesh);
         continue;
       }
@@ -231,6 +323,38 @@ export class Viewer {
       kind === 'bottom' ? new THREE.Vector3(0, -0.001, -1) :
       new THREE.Vector3(0.45, -0.85, 0.75);
     this.moveTo(t.clone().addScaledVector(dir.normalize(), d), t.clone());
+  }
+
+  /**
+   * A square picture of the parts alone (no plate, zones or problem marks)
+   * from the usual 3/4 angle, on a transparent background: for the library.
+   */
+  snapshot(px = 480): string | null {
+    const hidden = this.content.children.filter((o) => o.visible && (this.modMeshes.includes(o as THREE.Mesh) || o.userData.issue));
+    hidden.forEach((o) => (o.visible = false));
+    const box = new THREE.Box3().setFromObject(this.content);
+    if (box.isEmpty()) {
+      hidden.forEach((o) => (o.visible = true));
+      return null;
+    }
+    const cam = new THREE.PerspectiveCamera(30, 1, 1, 5000);
+    cam.up.set(0, 0, 1);
+    const c = box.getCenter(new THREE.Vector3());
+    const r = box.getSize(new THREE.Vector3()).length() / 2;
+    cam.position.copy(c).addScaledVector(new THREE.Vector3(0.45, -0.85, 0.75).normalize(), (r / Math.tan(THREE.MathUtils.degToRad(15))) * 1.02);
+    cam.lookAt(c);
+    const ratio = this.renderer.getPixelRatio();
+    this.bed.visible = false;
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(px, px, false);
+    this.renderer.render(this.scene, cam);
+    const url = this.renderer.domElement.toDataURL('image/png');
+    this.bed.visible = true;
+    hidden.forEach((o) => (o.visible = true));
+    this.renderer.setPixelRatio(ratio);
+    this.resize();
+    this.renderer.render(this.scene, this.camera);
+    return url;
   }
 
   screenshot(): string {

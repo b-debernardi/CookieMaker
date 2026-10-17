@@ -13,6 +13,21 @@ export interface ManualBridge {
   width: number; // mm
 }
 
+/**
+ * A zone of the design with its own settings, like a modifier in a slicer.
+ * Position is the centre in mm from the centre of the design (+y up), as the
+ * design looks normally (not mirrored).
+ */
+export interface Modifier {
+  shape: 'circle' | 'rect';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  forceMinThickness: boolean;
+  minThickness: number;
+}
+
 export interface Params {
   // Size and input
   sizeW: number;
@@ -70,6 +85,8 @@ export interface Params {
   bridgeWidth: number;
   manualBridges: ManualBridge[];
   solidBridges: boolean;
+  // Zones with their own settings
+  modifiers: Modifier[];
   // Advanced
   forceMinThickness: boolean;
   minThickness: number;
@@ -115,7 +132,7 @@ export const DEFAULTS: Params = {
 
   backing: 5.5,
   clearance: 0.9,
-  setClearance: 0.5,
+  setClearance: 0.9,
   mergeParts: true,
   partsMode: 'largest',
   reliefDepth: 3,
@@ -135,6 +152,8 @@ export const DEFAULTS: Params = {
   manualBridges: [],
   solidBridges: false,
 
+  modifiers: [],
+
   forceMinThickness: true,
   minThickness: 0.8,
   simplifyTol: 0.05,
@@ -145,7 +164,7 @@ export const DEFAULTS: Params = {
 /** Keys that describe the design rather than how it is manufactured. */
 export const DESIGN_KEYS: (keyof Params)[] = [
   'sizeW', 'sizeH', 'lockAspect', 'threshold', 'invertImage', 'cutMode', 'reliefMode',
-  'envelope', 'envelopePad', 'mirror', 'manualBridges', 'towerAuto', 'towerX', 'towerY', 'partsMode',
+  'envelope', 'envelopePad', 'mirror', 'manualBridges', 'towerAuto', 'towerX', 'towerY', 'partsMode', 'modifiers',
 ];
 
 export type Kind = 'len' | 'deg' | 'pct' | 'num' | 'bool' | 'choice';
@@ -265,7 +284,7 @@ export const SECTIONS: SectionMeta[] = [
       { key: 'clearance', label: 'Holgura con el cortador', kind: 'len', min: 0, max: 3, step: 0.05,
         when: (_p, c) => c.piece === 'stamp' },
       { key: 'setClearance', label: 'Holgura con el cortador', kind: 'len', min: 0.2, max: 3, step: 0.05,
-        when: (_p, c) => c.piece === 'set', hint: 'Espacio entre el sello y la pared del cortador. Con menos de 0.4 mm pueden pegarse al imprimir.' },
+        when: (_p, c) => c.piece === 'set', hint: 'Espacio entre el sello y la pared del cortador. Se agranda el cortador, no se recorta el sello. Con menos de 0.4 mm pueden pegarse al imprimir.' },
       { key: 'mergeParts', label: 'Placa completa', kind: 'bool', when: (_p, c) => c.piece === 'stamp',
         hint: 'Una sola placa que rodea todo el dibujo; las partes sueltas quedan en relieve sobre ella.' },
       { key: 'invertRelief', label: 'Invertir relieve', kind: 'bool', adv: true },
@@ -302,6 +321,12 @@ export const SECTIONS: SectionMeta[] = [
     ],
   },
   {
+    id: 'modifiers',
+    title: 'Modificadores',
+    pieces: ['imprint', 'stamp', 'set'],
+    fields: [],
+  },
+  {
     id: 'advanced',
     title: 'Avanzado',
     pieces: ALL,
@@ -328,6 +353,33 @@ export const PIECES: { value: Piece; label: string }[] = [
   { value: 'set', label: 'Cortador + sello' },
 ];
 
+/**
+ * How far the outside of the cutting wall sits past the design on each side,
+ * mm. The size the user enters is measured there, like a finished cutter is
+ * measured, so the design itself is drawn this much smaller. The stamp uses
+ * the cutter's margin so a stamp and a cutter of the same size fit together.
+ */
+export function cutMargin(p: Params, piece: Piece): number {
+  const wall = p.bladeInside ? 0 : p.bladeThickness;
+  const gap = piece === 'set' ? Math.max(0, p.setClearance) : 0;
+  const pad = p.envelope !== 'none' && !(piece === 'imprint' && p.edgesOnly) ? p.envelopePad : 0;
+  return wall + gap + pad;
+}
+
+/**
+ * The few settings used most for each piece. "Simple" mode shows only these
+ * (plus the size); everything else waits in "Avanzado".
+ */
+export const ESSENTIALS: Record<Piece, (keyof Params)[]> = {
+  cutter: ['cutMode', 'bladeDepth', 'bladeThickness'],
+  imprint: ['cutMode', 'reliefMode', 'lineWidth', 'bladeDepth', 'imprintDepth'],
+  stamp: ['reliefMode', 'lineWidth', 'reliefDepth', 'backing', 'clearance', 'towerHeight'],
+  set: ['reliefMode', 'lineWidth', 'bladeDepth', 'reliefDepth', 'backing', 'setClearance'],
+};
+
+/** Settings that belong to the picture, shown next to it in the input panel. */
+export const IMAGE_KEYS: (keyof Params)[] = ['threshold', 'invertImage'];
+
 export function cloneParams(p: Params): Params {
-  return { ...p, manualBridges: p.manualBridges.map((b) => ({ ...b })) };
+  return { ...p, manualBridges: p.manualBridges.map((b) => ({ ...b })), modifiers: p.modifiers.map((m) => ({ ...m })) };
 }
