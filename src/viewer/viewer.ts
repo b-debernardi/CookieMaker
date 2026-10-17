@@ -209,7 +209,7 @@ export class Viewer {
     const plate = new THREE.Mesh(
       new THREE.PlaneGeometry(size, size),
       new THREE.MeshStandardMaterial({
-        color: this.dark ? 0x2a2a2e : 0xf2f0ed,
+        color: this.dark ? 0x2b2f35 : 0xf5f7f9,
         roughness: 0.95,
         transparent: true,
         opacity: 0.9,
@@ -224,7 +224,7 @@ export class Viewer {
     }
     const grid = new THREE.LineSegments(
       new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(lines, 3)),
-      new THREE.LineBasicMaterial({ color: this.dark ? 0x3d3d42 : 0xdcd8d2 }),
+      new THREE.LineBasicMaterial({ color: this.dark ? 0x3b4048 : 0xd9dee4 }),
     );
     this.bed.add(grid);
     this.needsRender = true;
@@ -280,6 +280,7 @@ export class Viewer {
           new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.9, depthTest: false }),
         );
         mesh.renderOrder = 10;
+        mesh.userData.issue = true;
         this.content.add(mesh);
         continue;
       }
@@ -322,6 +323,38 @@ export class Viewer {
       kind === 'bottom' ? new THREE.Vector3(0, -0.001, -1) :
       new THREE.Vector3(0.45, -0.85, 0.75);
     this.moveTo(t.clone().addScaledVector(dir.normalize(), d), t.clone());
+  }
+
+  /**
+   * A square picture of the parts alone (no plate, zones or problem marks)
+   * from the usual 3/4 angle, on a transparent background: for the library.
+   */
+  snapshot(px = 480): string | null {
+    const hidden = this.content.children.filter((o) => o.visible && (this.modMeshes.includes(o as THREE.Mesh) || o.userData.issue));
+    hidden.forEach((o) => (o.visible = false));
+    const box = new THREE.Box3().setFromObject(this.content);
+    if (box.isEmpty()) {
+      hidden.forEach((o) => (o.visible = true));
+      return null;
+    }
+    const cam = new THREE.PerspectiveCamera(30, 1, 1, 5000);
+    cam.up.set(0, 0, 1);
+    const c = box.getCenter(new THREE.Vector3());
+    const r = box.getSize(new THREE.Vector3()).length() / 2;
+    cam.position.copy(c).addScaledVector(new THREE.Vector3(0.45, -0.85, 0.75).normalize(), (r / Math.tan(THREE.MathUtils.degToRad(15))) * 1.02);
+    cam.lookAt(c);
+    const ratio = this.renderer.getPixelRatio();
+    this.bed.visible = false;
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(px, px, false);
+    this.renderer.render(this.scene, cam);
+    const url = this.renderer.domElement.toDataURL('image/png');
+    this.bed.visible = true;
+    hidden.forEach((o) => (o.visible = true));
+    this.renderer.setPixelRatio(ratio);
+    this.resize();
+    this.renderer.render(this.scene, this.camera);
+    return url;
   }
 
   screenshot(): string {

@@ -2,7 +2,7 @@ import './ui/styles.css';
 import GeoWorker from './geometry/worker?worker&inline';
 import { Viewer } from './viewer/viewer';
 import {
-  DEFAULTS, PARTS_MODES, PIECES, SECTIONS, cloneParams,
+  DEFAULTS, ESSENTIALS, IMAGE_KEYS, PARTS_MODES, PIECES, SECTIONS, cloneParams,
   type FieldMeta, type FieldContext, type Params, type Piece, type Units,
 } from './model/params';
 import {
@@ -18,6 +18,9 @@ import { toStl } from './export/stl';
 import { to3mf } from './export/threemf';
 import { download, h, segmented, select, setRangeFill, toggle } from './ui/controls';
 import { isImageEditorOpen, openImageEditor } from './ui/imageEditor';
+import { createLibrary } from './library/view';
+import { newId, putItem, putVersion, sizeLabel, type LibItem, type LibVersion } from './library/db';
+import { designToSvg } from './library/svgOut';
 
 // ---------- State ----------
 
@@ -39,6 +42,8 @@ interface State {
   fontId: string;
   letterSpacing: number;
   lineHeight: number;
+  /** The library cutter on screen, while the design is still the one saved. */
+  libItemId: string | null;
 }
 
 const session = loadSession();
@@ -62,11 +67,14 @@ const state: State = {
   fontId: 'fredoka',
   letterSpacing: 0,
   lineHeight: 1.1,
+  libItemId: null,
 };
+let startAdvanced = false;
 try {
   const ui = JSON.parse(localStorage.getItem('cookiemaker.ui.v1') || '{}');
   if (ui.piece) state.piece = ui.piece;
   if (ui.units) state.units = ui.units;
+  if (ui.panel === 'advanced') startAdvanced = true;
 } catch {
   /* first visit */
 }
@@ -87,10 +95,48 @@ const app = document.getElementById('app')!;
 const stage = h('div', { class: 'stage' });
 const viewer = new Viewer(stage);
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
-viewer.setTheme(darkQuery.matches);
-darkQuery.addEventListener('change', (e) => viewer.setTheme(e.matches));
 viewer.buildBed(state.params.bedSize);
 viewer.setEdges(state.params.showEdges);
+
+// Light / dark: follows the system until the button picks one.
+const THEME_KEY = 'cookiemaker.tema';
+const isDark = () => {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === 'dark' : darkQuery.matches;
+};
+const themeBtn = h('button', { class: 'theme', type: 'button', onClick: () => {
+  const next = isDark() ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem(THEME_KEY, next); } catch { /* ignore */ }
+  applyTheme();
+} });
+themeBtn.innerHTML =
+  '<svg class="sun" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4"/></svg>' +
+  '<svg class="moon" viewBox="0 0 20 20" aria-hidden="true"><path d="M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7z"/></svg>';
+function applyTheme() {
+  const dark = isDark();
+  document.documentElement.classList.toggle('is-dark', dark);
+  const label = dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro';
+  themeBtn.title = label;
+  themeBtn.setAttribute('aria-label', label);
+  viewer.setTheme(dark);
+}
+try { const t = localStorage.getItem(THEME_KEY); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
+darkQuery.addEventListener('change', applyTheme);
+applyTheme();
+
+// Top bar: the two places of the app.
+type Place = 'editor' | 'library';
+const tabEditor = h('button', { class: 'tab', type: 'button', onClick: () => goTo('editor') }, 'Diseñar');
+const libCount = h('span', { class: 'tab-count' });
+const tabLibrary = h('button', { class: 'tab', type: 'button', onClick: () => goTo('library') }, 'Biblioteca', libCount);
+const brandMark = h('span', { class: 'mark', 'aria-hidden': 'true' });
+brandMark.innerHTML = '<svg viewBox="0 0 24 24"><path class="mark-body" d="M12 2.8c2 0 3.3 1.4 3.3 3.2 0 1-.4 1.8-1 2.4h4.2c1.2 0 1.9 1.3 1.2 2.3l-1.4 2c-.5.7-1.4.9-2.2.5l-.9-.5.9 6.3c.2 1.2-.8 2.2-2 2.2h-.6l-1.5-3.6-1.5 3.6h-.6c-1.2 0-2.2-1-2-2.2l.9-6.3-.9.5c-.8.4-1.7.2-2.2-.5l-1.4-2c-.7-1 0-2.3 1.2-2.3h4.2c-.6-.6-1-1.4-1-2.4 0-1.8 1.3-3.2 3.3-3.2z"/><circle class="mark-dot" cx="12" cy="12.6" r="1.1"/><circle class="mark-dot" cx="12" cy="15.6" r="1.1"/></svg>';
+const header = h('header', { class: 'bar' },
+  h('div', { class: 'brand' }, brandMark, h('h1', {}, 'CookieMaker')),
+  h('nav', { class: 'tabs', 'aria-label': 'Secciones' }, tabEditor, tabLibrary),
+  h('div', { class: 'bar-right' }, themeBtn),
+);
 
 const pieceSeg = segmented(PIECES, state.piece, (v) => {
   state.piece = v;
@@ -99,7 +145,7 @@ const pieceSeg = segmented(PIECES, state.piece, (v) => {
   refreshPartsCard();
   requestBuild(true);
 }, 'pill wide');
-const topbar = h('div', { class: 'topbar glass' }, pieceSeg.el);
+const topbar = h('div', { class: 'topbar float' }, pieceSeg.el);
 
 const leftScroll = h('div', { class: 'scroll' });
 const sourceSeg = segmented<Source>(
@@ -107,13 +153,21 @@ const sourceSeg = segmented<Source>(
   state.source,
   (v) => setSource(v),
 );
-const left = h('aside', { class: 'left glass', 'aria-label': 'Entrada' },
-  h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, 'CookieMaker')),
-  h('div', { style: { padding: '0 0.875rem 0.25rem' } }, sourceSeg.el),
+// Shown while the editor holds a cutter opened from (or saved to) the library.
+const linkCard = h('div', { class: 'link-card', hidden: true });
+const left = h('aside', { class: 'left sidebar', 'aria-label': 'Diseño' },
+  h('h2', {}, 'Diseño'),
+  sourceSeg.el,
   leftScroll,
+  linkCard,
 );
 
 const rightScroll = h('div', { class: 'scroll' });
+const modeSeg = segmented<'simple' | 'advanced'>(
+  [{ value: 'simple', label: 'Simple' }, { value: 'advanced', label: 'Avanzado' }],
+  'simple',
+  (v) => setPanelMode(v),
+);
 const unitsSeg = segmented<Units>([{ value: 'mm', label: 'mm' }, { value: 'in', label: 'in' }], state.units, (v) => {
   state.units = v;
   persistUi();
@@ -126,38 +180,41 @@ const revertBtn = h('button', {
   class: 'btn small', type: 'button', title: 'Volver a los valores guardados del perfil', hidden: true,
   onClick: () => onRevertProfile(),
 }, 'Revertir');
-const right = h('aside', { class: 'right glass', 'aria-label': 'Parámetros' },
-  h('div', { class: 'panel-head' }, h('div', { class: 'panel-title' }, 'Ajustes'), unitsSeg.el),
-  h('div', { class: 'profile-bar' },
-    profileSelect,
-    modifiedTag,
-    revertBtn,
-    h('button', { class: 'btn small', type: 'button', onClick: () => onSaveProfile() }, 'Guardar'),
-  ),
+const profileBar = h('div', { class: 'profile-bar' },
+  profileSelect,
+  modifiedTag,
+  revertBtn,
+  h('button', { class: 'btn small', type: 'button', onClick: () => onSaveProfile() }, 'Guardar'),
+);
+const right = h('aside', { class: 'right sidebar', 'aria-label': 'Ajustes' },
+  h('div', { class: 'panel-head' }, h('h2', {}, 'Ajustes'), modeSeg.el),
   rightScroll,
 );
 
 const dimsEl = h('span', { class: 'dims' }, '—');
 const dot = h('span', { class: 'dot busy' });
-const statusText = h('span', {}, 'Generando');
+const statusText = h('span', { class: 'status-text' }, 'Generando');
 const statusBtn = h('button', {
   class: 'btn status-pill', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false',
   onClick: () => togglePopover(),
 }, dot, statusText);
-const popover = h('div', { class: 'popover glass', role: 'dialog', 'aria-label': 'Avisos' });
-const bottombar = h('div', { class: 'bottombar glass' },
+const popover = h('div', { class: 'popover float', role: 'dialog', 'aria-label': 'Avisos' });
+const bottombar = h('div', { class: 'bottombar float' },
   dimsEl,
   statusBtn,
+  h('span', { class: 'bb-sep', 'aria-hidden': 'true' }),
+  h('button', { class: 'btn', type: 'button', 'aria-label': 'Guardar en biblioteca', title: 'Guarda el diseño, la imagen, los parámetros y el STL', onClick: () => openSaveDialog() },
+    'Guardar', h('span', { class: 'long' }, ' en biblioteca')),
   h('button', { class: 'btn', type: 'button', onClick: () => exportAs('stl') }, 'STL'),
   h('button', { class: 'btn primary', type: 'button', onClick: () => exportAs('3mf') }, 'Exportar 3MF'),
 );
-const views = h('div', { class: 'views glass' },
+const views = h('div', { class: 'views float' },
   h('button', { class: 'btn icon', type: 'button', onClick: () => viewer.view('iso') }, '3D'),
   h('button', { class: 'btn icon', type: 'button', onClick: () => viewer.view('top') }, 'Arriba'),
   h('button', { class: 'btn icon', type: 'button', onClick: () => viewer.view('bottom') }, 'Abajo'),
   h('button', { class: 'btn icon', type: 'button', onClick: () => viewer.frame() }, 'Encuadrar'),
 );
-const toast = h('div', { class: 'toast glass', role: 'status' });
+const toast = h('div', { class: 'toast', role: 'status', popover: 'manual' });
 
 // Separate shapes in the cutter + stamp set: pick what to do with them.
 const partsTitle = h('strong');
@@ -185,15 +242,27 @@ function refreshPartsCard() {
   partsHint.textContent = PARTS_MODES.find((m) => m.value === state.params.partsMode)!.hint;
 }
 
-stage.append(views);
-const syncInsets = () => {
-  if (innerWidth <= 860) return viewer.setInsets(0, 0);
-  const l = left.getBoundingClientRect(), r = right.getBoundingClientRect();
-  viewer.setInsets(l.right + 8, innerWidth - r.left + 8);
-};
-new ResizeObserver(syncInsets).observe(document.body);
-left.append(partsCard);
-app.append(stage, topbar, left, right, popover, bottombar, toast);
+const center = h('section', { class: 'center' }, stage, topbar, views, popover, bottombar);
+left.insertBefore(partsCard, linkCard);
+const editorView = h('main', { class: 'view editor' }, left, center, right);
+const library = createLibrary({
+  openVersion: (item, version) => openFromLibrary(item, version),
+  goToEditor: () => goTo('editor'),
+  toast: (t) => showToast(t),
+  onChange: (n) => { libCount.textContent = n ? String(n) : ''; refreshLinkCard(); },
+});
+app.append(header, editorView, library.el, toast);
+
+function goTo(p: Place) {
+  editorView.hidden = p !== 'editor';
+  library.el.hidden = p !== 'library';
+  for (const [t, here] of [[tabEditor, p === 'editor'], [tabLibrary, p === 'library']] as const) {
+    if (here) t.setAttribute('aria-current', 'page');
+    else t.removeAttribute('aria-current');
+  }
+  if (p === 'library') library.show();
+  else requestAnimationFrame(() => viewer.frame());
+}
 
 // ---------- Input panel ----------
 
@@ -217,7 +286,7 @@ function renderLeft() {
       h('div', { class: 'file-name' }, state.svgName),
       h('div', { class: 'group-title' }, 'Ejemplos'),
       h('div', { class: 'chips' }, SAMPLES.map((s) =>
-        h('button', { class: 'btn small', type: 'button', onClick: () => { state.svgText = s.svg; state.svgName = s.label; renderLeft(); updateDesign(); } }, s.label),
+        h('button', { class: 'btn small', type: 'button', onClick: () => { state.svgText = s.svg; state.svgName = s.label; unlink(); renderLeft(); updateDesign(); } }, s.label),
       )),
     );
   } else if (state.source === 'image') {
@@ -229,23 +298,24 @@ function renderLeft() {
     if (binPreview) {
       leftScroll.append(h('div', { class: 'preview' },
         h('img', { src: binPreview, alt: 'Vista binarizada' }),
-        h('div', { class: 'cap' }, 'Así ve la imagen el trazado. Ajustá el umbral en Diseño.'),
+        h('div', { class: 'cap' }, 'Así lee la imagen el trazado'),
       ));
     }
+    if (state.image) leftScroll.append(h('div', { class: 'group image-opts' }, ...imageRows.map((r) => r.el)));
   } else {
     const ta = h('textarea', {
       class: 'text-in', 'aria-label': 'Texto', value: state.text, rows: 2,
-      onInput: () => { state.text = ta.value; updateDesign(); },
+      onInput: () => { state.text = ta.value; unlink(); updateDesign(); },
     });
     const fontSel = select(
       [...BUILTIN_FONTS.map((f) => ({ value: f.id, label: f.label })), ...(customFonts.map((f) => ({ value: f, label: f })))],
       state.fontId,
-      (v) => { state.fontId = v; updateDesign(); },
+      (v) => { state.fontId = v; unlink(); updateDesign(); },
       'Fuente',
     );
     const spacing = h('input', {
       type: 'range', min: '-20', max: '40', step: '1', value: String(state.letterSpacing), 'aria-label': 'Espaciado',
-      onInput: () => { state.letterSpacing = +spacing.value; setRangeFill(spacing); spacingVal.textContent = spacing.value; updateDesign(); },
+      onInput: () => { state.letterSpacing = +spacing.value; setRangeFill(spacing); spacingVal.textContent = spacing.value; unlink(); updateDesign(); },
     });
     const spacingVal = h('span', { class: 'label', style: { color: 'var(--text-2)' } }, String(state.letterSpacing));
     setRangeFill(spacing);
@@ -267,6 +337,7 @@ const customFonts: string[] = [];
 
 async function loadFile(file: File) {
   fileInput.value = '';
+  if (!/\.(ttf|otf|woff)$/i.test(file.name)) unlink();
   const name = file.name.toLowerCase();
   try {
     if (name.endsWith('.svg') || file.type === 'image/svg+xml') {
@@ -300,15 +371,17 @@ async function editImage() {
   const edited = await openImageEditor(state.image, state.imageOriginal ?? state.image);
   if (!edited) return;
   state.image = edited;
+  unlink();
   updateDesign(true);
 }
 
-function setSource(s: Source) {
+function setSource(s: Source, keepParams = false) {
   const changed = s !== state.source;
+  if (changed && !keepParams) unlink();
   state.source = s;
   sourceSeg.set(s);
   // Text usually wants every hole cut (O, A, B); drawings only the outline.
-  if (changed) {
+  if (changed && !keepParams) {
     state.params.cutMode = s === 'text' ? 'holes' : 'outline';
     state.params.reliefMode = s === 'svg' ? 'edges' : 'fill';
     rows.forEach((r) => r.update());
@@ -519,6 +592,8 @@ function updateBottom() {
 
 let toastTimer = 0;
 function showToast(text: string) {
+  // As a popover it shows above an open window too.
+  try { toast.hidePopover(); toast.showPopover(); } catch { /* not supported: stays under windows */ }
   toast.textContent = text;
   toast.classList.add('show');
   clearTimeout(toastTimer);
@@ -535,19 +610,247 @@ function exportAs(kind: 'stl' | '3mf') {
   const pieceName = { cutter: 'cortador', imprint: 'imprint', stamp: 'sello', set: 'cortador-sello' }[state.piece];
   const blob = kind === 'stl' ? toStl(parts) : to3mf(parts);
   download(blob, `${base}-${pieceName}.${kind}`);
-  showToast(kind === 'stl' ? 'STL descargado' : '3MF descargado');
+  // Every exported cutter is kept in the library with what made it.
+  const what = kind === 'stl' ? 'STL' : '3MF';
+  saveToLibrary({})
+    .then((r) => showToast(`${what} descargado y guardado en la biblioteca${r.created ? '' : ` (${r.item.name})`}`))
+    .catch((e) => { console.error(e); showToast(`${what} descargado. No se pudo guardar en la biblioteca`); });
 }
 
 function baseName(): string {
+  return slugify(displayName()) || 'galleta';
+}
+
+function displayName(): string {
   const raw = state.source === 'svg' ? state.svgName : state.source === 'image' ? state.imageName : state.text;
-  return (raw || 'galleta').replace(/\.[a-z0-9]+$/i, '').normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) || 'galleta';
+  return (raw || 'Galleta').replace(/\.[a-z0-9]+$/i, '').replace(/[-_]+/g, ' ').trim().slice(0, 60) || 'Galleta';
+}
+
+function slugify(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40);
+}
+
+// ---------- Library ----------
+
+/** Forgets which library cutter the editor holds (the design changed). */
+function unlink() {
+  if (!state.libItemId) return;
+  state.libItemId = null;
+  refreshLinkCard();
+}
+
+function refreshLinkCard() {
+  const e = state.libItemId ? library.get(state.libItemId) : undefined;
+  linkCard.hidden = !e;
+  if (!e) return;
+  const n = e.versions.length;
+  linkCard.replaceChildren(
+    h('div', {},
+      h('small', {}, 'En la biblioteca'),
+      h('b', {}, e.item.name),
+      h('small', {}, `${n} ${n === 1 ? 'versión' : 'versiones'}`),
+    ),
+    h('button', { class: 'btn small', type: 'button', onClick: () => library.openItem(e.item.id) }, 'Ver versiones'),
+  );
+}
+
+/** Resolves once the model on screen matches the current settings. */
+function whenBuilt(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t0 = performance.now();
+    const check = () => {
+      if (!busy && !pending) return lastResult?.ok ? resolve() : reject(new Error('No hay un modelo generado'));
+      if (performance.now() - t0 > 90000) return reject(new Error('Tardó demasiado en generar'));
+      setTimeout(check, 100);
+    };
+    check();
+  });
+}
+
+/** A picture of the parts for the library cards. */
+async function captureThumb(): Promise<Blob | undefined> {
+  try {
+    const url = viewer.snapshot(480);
+    return url ? await (await fetch(url)).blob() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function bitmapToPng(b: ImageBitmap): Promise<Blob> {
+  const c = document.createElement('canvas');
+  c.width = b.width;
+  c.height = b.height;
+  c.getContext('2d')!.drawImage(b, 0, 0);
+  return new Promise((r, j) => c.toBlob((x) => (x ? r(x) : j(new Error('png'))), 'image/png'));
+}
+
+function currentSvg(): string {
+  return state.source === 'svg' ? state.svgText : designToSvg(design!);
+}
+
+/** Versions are told apart by piece and size: saving the same one again replaces it. */
+const sameVersion = (v: LibVersion, piece: Piece, size: number) => v.piece === piece && Math.round(v.size) === Math.round(size);
+
+async function saveToLibrary(o: { name?: string; category?: string; asNew?: boolean }) {
+  await whenBuilt();
+  const res = lastResult!;
+  const now = Date.now();
+  const thumb = await captureThumb();
+  let item = !o.asNew && state.libItemId ? (await library.ready(), library.get(state.libItemId)?.item) : undefined;
+  const created = !item;
+  if (!item) {
+    item = {
+      id: newId(), name: o.name || displayName(), category: o.category ?? '', source: state.source,
+      svg: currentSvg(), thumb, created: now, updated: now,
+    };
+    if (state.source === 'image' && state.image) {
+      item.image = await bitmapToPng(state.image);
+      item.imageName = state.imageName;
+    }
+    if (state.source === 'text') Object.assign(item, { text: state.text, fontId: state.fontId, letterSpacing: state.letterSpacing });
+  } else {
+    if (o.name) item.name = o.name;
+    if (o.category !== undefined) item.category = o.category;
+    item.updated = now;
+    item.thumb ??= thumb;
+  }
+  const params = cloneParams(state.params);
+  const size = Math.max(params.sizeW, params.sizeH);
+  const old = library.get(item.id)?.versions.find((v) => sameVersion(v, state.piece, size));
+  const version: LibVersion = {
+    id: old?.id ?? newId(), itemId: item.id, piece: state.piece, params, size,
+    dims: res.size.map((v) => round(v, 1)) as [number, number, number],
+    stl: toStl(res.meshes.filter((m) => m.role === 'part')), thumb, created: now,
+  };
+  await putItem(item);
+  await putVersion(version);
+  state.libItemId = item.id;
+  await library.refresh();
+  refreshLinkCard();
+  return { item, version, created, replaced: !!old };
+}
+
+// The save window: name, category, and what exactly gets saved.
+const saveDlg = h('dialog', { class: 'dlg dlg-save', 'aria-labelledby': 'ds-title' });
+saveDlg.addEventListener('click', (e) => { if (e.target === saveDlg) saveDlg.close(); });
+document.body.append(saveDlg);
+
+async function openSaveDialog() {
+  if (!design) return showToast('Todavía no hay un diseño para guardar');
+  await library.ready();
+  let asNew = false;
+  const linked = state.libItemId ? library.get(state.libItemId) : undefined;
+  const p = state.params;
+  const size = Math.max(p.sizeW, p.sizeH);
+  const pieceLabel = PIECES.find((x) => x.value === state.piece)!.label;
+  const nameIn = h('input', { value: linked?.item.name ?? displayName(), autocomplete: 'off', required: true });
+  const catIn = h('input', { value: linked?.item.category ?? '', list: 'lib-cats', placeholder: 'Ej.: fútbol, navidad', autocomplete: 'off' });
+  const ph = h('div', { class: 'ds-ph' });
+  captureThumb().then((b) => { if (b) ph.append(h('img', { src: URL.createObjectURL(b), alt: '' })); });
+  const note = h('p', { class: 'replace-note' });
+  const result = h('p', { class: 'result', role: 'status' });
+  const saveBtn = h('button', { class: 'primary', type: 'submit' }, 'Guardar');
+  const renderNote = () => {
+    note.hidden = !linked;
+    if (!linked) return;
+    const old = linked.versions.find((v) => sameVersion(v, state.piece, size));
+    note.replaceChildren(
+      asNew
+        ? h('span', {}, 'Se guarda como un cortante nuevo, aparte de ', h('b', {}, linked.item.name), '.')
+        : h('span', {}, old ? 'Reemplaza la versión de ' : 'Se agrega como versión de ', h('b', {}, `${sizeLabel(size)} · ${pieceLabel}`), ' en ', h('b', {}, linked.item.name), '.'),
+      h('button', { class: 'text small', type: 'button', onClick: () => { asNew = !asNew; renderNote(); } },
+        asNew ? `Agregar a ${linked.item.name}` : 'Guardar como cortante nuevo'),
+    );
+  };
+  renderNote();
+  const form = h('form', { class: 'ds-form' },
+    h('div', { class: 'dlg-head' },
+      h('h2', { id: 'ds-title' }, 'Guardar en la biblioteca'),
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Cerrar sin guardar', onClick: () => saveDlg.close() }, '✕'),
+    ),
+    h('div', { class: 'ds-body' },
+      ph,
+      h('div', { class: 'ds-fields' },
+        h('label', { class: 'input' }, h('span', {}, 'Nombre'), nameIn),
+        h('label', { class: 'input' }, h('span', {}, 'Categoría'), catIn),
+        h('div', { class: 'ds-version' }, h('b', {}, sizeLabel(size)), h('span', { class: 'badge' }, pieceLabel)),
+        h('p', { class: 'muted small' }, `Se guardan el diseño en SVG${state.source === 'image' ? ', la imagen' : ''}, los parámetros y el STL. Desde la biblioteca después generás otros tamaños.`),
+      ),
+    ),
+    note,
+    h('div', { class: 'dlg-foot' }, result,
+      h('button', { class: 'secondary', type: 'button', onClick: () => saveDlg.close() }, 'Cancelar'),
+      saveBtn,
+    ),
+  );
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Guardando…';
+    try {
+      const r = await saveToLibrary({ name: nameIn.value.trim(), category: catIn.value.trim(), asNew });
+      saveDlg.close();
+      showToast(r.replaced ? `Versión de ${sizeLabel(r.version.size)} actualizada en ${r.item.name}` : `${r.item.name} guardado en la biblioteca`);
+    } catch (err) {
+      console.error(err);
+      result.className = 'result bad';
+      result.textContent = `No se pudo guardar: ${(err as Error).message}`;
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Guardar';
+    }
+  });
+  saveDlg.replaceChildren(form);
+  saveDlg.showModal();
+  nameIn.select();
+}
+
+/** Opens a saved version in the editor, ready to tweak and save again. */
+async function openFromLibrary(item: LibItem, v: LibVersion) {
+  try {
+    state.piece = v.piece;
+    pieceSeg.set(v.piece);
+    state.params = cloneParams({ ...DEFAULTS, ...v.params });
+    partsSeg.set(state.params.partsMode);
+    let source: Source = 'svg';
+    if (item.source === 'image' && item.image) {
+      const bmp = await createImageBitmap(item.image);
+      state.image = state.imageOriginal = bmp;
+      state.imageName = item.imageName || item.name;
+      source = 'image';
+    } else if (item.source === 'text' && item.text && BUILTIN_FONTS.some((f) => f.id === item.fontId)) {
+      state.text = item.text;
+      state.fontId = item.fontId!;
+      state.letterSpacing = item.letterSpacing ?? 0;
+      source = 'text';
+    } else {
+      state.svgText = item.svg;
+      state.svgName = item.name;
+    }
+    viewer.buildBed(state.params.bedSize);
+    viewer.setEdges(state.params.showEdges);
+    setSource(source, true);
+    state.libItemId = item.id;
+    rows.forEach((r) => r.update());
+    refreshProfile();
+    refreshLinkCard();
+    saveSession({ params: state.params, profile: state.profile });
+    persistUi();
+    goTo('editor');
+    showToast(`${item.name} · ${sizeLabel(v.size)} abierto`);
+  } catch (e) {
+    console.error(e);
+    showToast('No se pudo abrir esa versión');
+  }
 }
 
 // ---------- Parameter panel ----------
 
 interface RowHandle {
   key?: keyof Params;
+  /** A copy shown in the simple panel. */
+  essential?: boolean;
   el: HTMLElement;
   meta?: FieldMeta;
   section: string;
@@ -568,6 +871,7 @@ const DESIGN_PARAMS = new Set<keyof Params>(['resolution', 'threshold', 'invertI
 
 function setParam<K extends keyof Params>(key: K, value: Params[K]) {
   state.params[key] = value;
+  if (IMAGE_KEYS.includes(key)) unlink();
   if (key === 'bedSize') viewer.buildBed(value as number);
   if (key === 'showEdges') viewer.setEdges(value as boolean);
   refreshVisibility();
@@ -820,6 +1124,37 @@ viewer.onModifierMove = (index, dx, dy) => {
 };
 
 function buildPanel() {
+  // Simple: the size and the few settings used most for the current piece.
+  const simple = h('div', { class: 'group' });
+  const addSimple = (r: RowHandle) => {
+    r.essential = true;
+    rows.push(r);
+    simple.append(r.el);
+  };
+  addSimple(sizeRow());
+  const order: (keyof Params)[] = [
+    'cutMode', 'reliefMode', 'lineWidth', 'bladeDepth', 'bladeThickness', 'imprintDepth',
+    'reliefDepth', 'backing', 'clearance', 'setClearance', 'towerHeight',
+  ];
+  for (const key of order) {
+    for (const sec of SECTIONS) {
+      for (const m of sec.fields) if (m.key === key) addSimple(fieldRow({ ...m, adv: false }, sec.id));
+    }
+  }
+  simpleWrap.append(
+    simple,
+    h('button', { class: 'see-all', type: 'button', onClick: () => setPanelMode('advanced') },
+      h('span', {}, 'Ver todos los ajustes'),
+      h('small', {}, 'Base, filo, puentes, zonas, impresora…'),
+    ),
+  );
+
+  // Advanced: everything, by section, plus the printer profile and units.
+  advWrap.append(
+    h('div', { class: 'group-title' }, 'Perfil de impresión'),
+    profileBar,
+    h('div', { class: 'units-row' }, h('span', {}, 'Unidades'), unitsSeg.el),
+  );
   for (const sec of SECTIONS) {
     const main = h('div', { class: 'group' });
     const moreInner = h('div', { class: 'more-inner' });
@@ -830,8 +1165,8 @@ function buildPanel() {
     };
     if (sec.id === 'design') add(sizeRow());
     for (const m of sec.fields) {
-      const r = m.kind === 'bool' ? boolRow(m, sec.id) : m.kind === 'choice' ? choiceRow(m, sec.id) : numberRow(m, sec.id);
-      add(r, m.adv);
+      if (IMAGE_KEYS.includes(m.key)) continue; // next to the picture, in the left panel
+      add(fieldRow(m, sec.id), m.adv);
     }
     if (sec.id === 'bridges') add(bridgesBlock(), true);
     if (sec.id === 'modifiers') add(modifiersBlock());
@@ -851,15 +1186,45 @@ function buildPanel() {
     }
     const wrap = h('section', {}, h('div', { class: 'group-title' }, sec.title), main);
     sectionEls.set(sec.id, wrap);
-    rightScroll.append(wrap);
+    advWrap.append(wrap);
   }
+  rightScroll.append(simpleWrap, advWrap);
+
+  // Picture settings live next to the picture.
+  for (const key of IMAGE_KEYS) {
+    const m = SECTIONS.flatMap((s) => s.fields).find((f) => f.key === key)!;
+    const r = fieldRow({ ...m, when: undefined }, 'design');
+    rows.push(r);
+    imageRows.push(r);
+  }
+}
+
+function fieldRow(m: FieldMeta, section: string): RowHandle {
+  return m.kind === 'bool' ? boolRow(m, section) : m.kind === 'choice' ? choiceRow(m, section) : numberRow(m, section);
+}
+
+const simpleWrap = h('div', { class: 'simple' });
+const advWrap = h('div', { class: 'advanced' });
+const imageRows: RowHandle[] = [];
+let panelMode: 'simple' | 'advanced' = 'simple';
+
+function setPanelMode(mode: 'simple' | 'advanced') {
+  panelMode = mode;
+  modeSeg.set(mode);
+  simpleWrap.hidden = mode !== 'simple';
+  advWrap.hidden = mode !== 'advanced';
+  rows.forEach((r) => r.update());
+  rightScroll.scrollTop = 0;
+  persistUi();
 }
 
 function refreshVisibility() {
   const c = ctx();
   for (const sec of SECTIONS) sectionEls.get(sec.id)!.hidden = !sec.pieces.includes(c.piece);
   for (const r of rows) {
-    if (r.meta?.when) r.el.hidden = !r.meta.when(state.params, c);
+    let show = r.meta?.when ? r.meta.when(state.params, c) : true;
+    if (r.essential && r.key) show &&= ESSENTIALS[c.piece].includes(r.key);
+    r.el.hidden = !show;
   }
 }
 
@@ -930,7 +1295,7 @@ function refreshProfile() {
 
 function persistUi() {
   try {
-    localStorage.setItem('cookiemaker.ui.v1', JSON.stringify({ piece: state.piece, units: state.units }));
+    localStorage.setItem('cookiemaker.ui.v1', JSON.stringify({ piece: state.piece, units: state.units, panel: panelMode }));
   } catch {
     /* ignore */
   }
@@ -939,11 +1304,13 @@ function persistUi() {
 // ---------- Start ----------
 
 buildPanel();
-syncInsets();
+setPanelMode(startAdvanced ? 'advanced' : 'simple');
 renderProfiles();
 renderLeft();
 refreshVisibility();
 pieceSeg.set(state.piece);
+goTo('editor');
+library.ready();
 updateDesign(true);
 
 // Exposed for automated checks.

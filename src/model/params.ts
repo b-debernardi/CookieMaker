@@ -132,7 +132,7 @@ export const DEFAULTS: Params = {
 
   backing: 5.5,
   clearance: 0.9,
-  setClearance: 0.5,
+  setClearance: 0.9,
   mergeParts: true,
   partsMode: 'largest',
   reliefDepth: 3,
@@ -352,6 +352,20 @@ export const PIECES: { value: Piece; label: string }[] = [
   { value: 'stamp', label: 'Sello' },
   { value: 'set', label: 'Cortador + sello' },
 ];
+
+/**
+ * The few settings used most for each piece. "Simple" mode shows only these
+ * (plus the size); everything else waits in "Avanzado".
+ */
+export const ESSENTIALS: Record<Piece, (keyof Params)[]> = {
+  cutter: ['cutMode', 'bladeDepth', 'bladeThickness'],
+  imprint: ['cutMode', 'reliefMode', 'lineWidth', 'bladeDepth', 'imprintDepth'],
+  stamp: ['reliefMode', 'lineWidth', 'reliefDepth', 'backing', 'clearance', 'towerHeight'],
+  set: ['reliefMode', 'lineWidth', 'bladeDepth', 'reliefDepth', 'backing', 'setClearance'],
+};
+
+/** Settings that belong to the picture, shown next to it in the input panel. */
+export const IMAGE_KEYS: (keyof Params)[] = ['threshold', 'invertImage'];
 
 export function cloneParams(p: Params): Params {
   return { ...p, manualBridges: p.manualBridges.map((b) => ({ ...b })), modifiers: p.modifiers.map((m) => ({ ...m })) };
