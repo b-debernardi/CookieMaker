@@ -46,7 +46,8 @@ Reglas:
 ## 3. Qué se guarda de cada cortante (Pro)
 
 - **Cortante:** nombre, categoría, origen (svg, imagen o texto), el diseño como SVG, y para texto el texto,
-  la fuente y el espaciado. Miniatura en PNG.
+  la fuente y el espaciado. Miniatura en PNG chico (hasta 64 KB), guardado en la misma tabla: sin bucket de
+  archivos, sin links firmados y sin archivos huérfanos al borrar una cuenta.
 - **Versión:** pieza, parámetros, tamaño y medidas. **El STL no se guarda:** se regenera en el navegador al
   bajarlo, a partir del SVG y los parámetros. Ocupa mucho menos y se puede ofrecer más espacio barato.
 - **De las imágenes se guarda solo el SVG trazado**, no la imagen original. Para retocar la imagen hay que
@@ -135,14 +136,16 @@ Lo mínimo para salir a internet. Cada punto tiene una prueba automática o una 
 - La clave pública (anon) es la única que llega al navegador. La clave de servicio vive solo en las Edge Functions.
 - Los secretos (Mercado Pago, SMTP, Sentry) van en variables de entorno de Supabase y Cloudflare, nunca en el
   repo. `.env` en `.gitignore` y escaneo de secretos activado en GitHub.
-- Todo lo que entra al servidor se valida con un esquema (zod): parámetros con sus mínimos y máximos de
-  `params.ts`, largo de textos, tamaño del SVG. Lo que no cumple se rechaza.
+- Todo lo que entra a la base se valida en la base misma, porque la app escribe directo por la API: largo de
+  textos, SVG limpio, PNG chico, parámetros como objeto JSON de hasta 16 KB. Lo que no cumple se rechaza.
+  Los parámetros se vuelven a validar al leerlos (`sanitizeParams`: claves conocidas, números dentro de los
+  límites de cada campo, listas cortas), así un valor raro guardado nunca llega al motor.
 
 **Archivos del usuario**
 - Al servidor solo llega el SVG regenerado por la app. Igual se vuelve a validar en el servidor: solo
   `<svg>` y `<path>` con atributos `d`, `fill`, `stroke`, `stroke-width` y similares; cualquier otra cosa se rechaza.
 - Los SVG nunca se muestran insertados en la página: se dibujan en canvas o como `<img>` desde un blob.
-- Miniaturas en un bucket privado, con links firmados que vencen.
+- Miniaturas: PNG de hasta 64 KB guardados en la tabla, con la firma de PNG verificada por la base.
 - Límites de tamaño al cargar en el navegador (archivo y resolución de imagen) para que la pestaña no se cuelgue.
 
 **Login y abuso**
@@ -224,7 +227,7 @@ Las pruebas de CI van en `.github/workflows/` en la raíz del repo, filtradas pa
 **Fase 0: base.** *(Lista el 27/10/2026, salvo los proyectos de Supabase, que crea Bruno.)* Copiar el motor a `packages/core` y separar lo que depende del DOM. TypeScript estricto,
 lint, pruebas (pasar `test/geo.test.ts` a Vitest y sumar casos). CI. Proyectos de Supabase de staging y producción.
 
-**Fase 1: backend.** Login con Google y link por mail (con captcha). Esquema, RLS y sus pruebas.
+**Fase 1: backend.** *(Base de datos, permisos, plan, límites, cuenta y configuración de login listos el 27/10/2026; la configuración del panel de Supabase y Google la hace Bruno, ver `docs/SUPABASE.md`.)* Login con Google y link por mail (con captcha). Esquema, RLS y sus pruebas.
 `entitlement()` y `register_export()`. Biblioteca en la nube (crear, listar, editar, borrar, zip).
 Borrar cuenta y bajar datos. Mails transaccionales.
 

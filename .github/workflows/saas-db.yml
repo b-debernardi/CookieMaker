@@ -1,0 +1,56 @@
+# Applies saas/supabase/migrations to the cloud projects.
+# Staging: on every push to main that changes a migration.
+# Production: only by hand (workflow_dispatch), behind the "production"
+# environment's required reviewers. Does nothing until the variables in
+# saas/docs/SUPABASE.md are set.
+name: saas-db
+
+on:
+  push:
+    branches: [main]
+    paths: ['saas/supabase/migrations/**']
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Proyecto
+        type: choice
+        options: [staging, production]
+        default: staging
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saas-db-${{ github.event.inputs.target || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ github.event.inputs.target || 'staging' }}
+    env:
+      TARGET: ${{ github.event.inputs.target || 'staging' }}
+      PROJECT_REF: ${{ (github.event.inputs.target || 'staging') == 'production' && vars.SUPABASE_PRODUCTION_REF || vars.SUPABASE_STAGING_REF }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ (github.event.inputs.target || 'staging') == 'production' && secrets.SUPABASE_PRODUCTION_DB_PASSWORD || secrets.SUPABASE_STAGING_DB_PASSWORD }}
+    defaults:
+      run:
+        working-directory: saas
+    steps:
+      - name: Sin configurar todavía
+        if: env.PROJECT_REF == ''
+        run: echo "Faltan las variables de Supabase para $TARGET (saas/docs/SUPABASE.md). No se aplica nada."
+      - uses: actions/checkout@v4
+        if: env.PROJECT_REF != ''
+        with:
+          persist-credentials: false
+      - uses: supabase/setup-cli@v1
+        if: env.PROJECT_REF != ''
+        with:
+          version: 2.122.0
+      - name: Aplicar migraciones
+        if: env.PROJECT_REF != ''
+        run: |
+          supabase link --project-ref "$PROJECT_REF"
+          supabase db push --linked

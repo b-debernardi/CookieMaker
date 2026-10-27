@@ -4,9 +4,11 @@
 
 export * from './model/params';
 export { paramsAtSize } from './model/size';
+export { sanitizeParams, MAX_LIST } from './model/sanitize';
 export * from './input/types';
 export { parseSvg, divisionsFor } from './input/svg';
 export { designToSvg } from './input/svgOut';
+export { isCleanSvg } from './input/cleanSvg';
 export { textToDesign, MAX_TEXT_LENGTH, type TextOptions } from './input/text';
 export { thresholdPixels, TRACE_PAD } from './input/threshold';
 export { loadManifold, Arena, type Wasm, type CS, type M } from './geometry/wasm';
