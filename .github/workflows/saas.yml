@@ -1,0 +1,43 @@
+# Checks for the SaaS version (saas/). Runs only when something under saas/
+# or this file changes; the local app is not affected.
+name: saas
+
+on:
+  push:
+    branches: [main]
+    paths: ['saas/**', '.github/workflows/saas.yml']
+  pull_request:
+    paths: ['saas/**', '.github/workflows/saas.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saas-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: saas
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: saas/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Dependencias sin vulnerabilidades conocidas
+        run: npm audit --audit-level=moderate
+      - name: Tipos
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Pruebas
+        run: npm test
