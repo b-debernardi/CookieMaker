@@ -41,3 +41,32 @@ jobs:
         run: npm run lint
       - name: Pruebas
         run: npm test
+
+  # Database tests against Supabase's real Postgres image, with the migrations applied.
+  db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: saas
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: saas/package-lock.json
+      - run: npm ci --ignore-scripts
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.0
+      - name: Base local con las migraciones
+        run: |
+          supabase db start
+          supabase migration up --local
+      - name: Pruebas de la base
+        run: npm run test:db
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres

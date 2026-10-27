@@ -9,16 +9,20 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p supabase/tsconfig.json",
     "lint": "eslint .",
-    "test": "vitest run",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "test": "vitest run --project unit",
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "test:db": "vitest run --project db",
+    "db:local": "bash supabase/tests/local-db.sh"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.19.0",
+    "@types/pg": "^8.23.1",
     "eslint": "^10.13.0",
     "happy-dom": "^21.0.4",
+    "pg": "^8.23.1",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.72.1",
     "vitest": "^5.0.5"
